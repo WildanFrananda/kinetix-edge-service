@@ -1,0 +1,17 @@
+local check = require("tests.support.check")
+local client_address = require("http.client_address")
+
+describe("client_address", function()
+   it("takes the last entry, the one the gateway appended", function()
+      check.equal(client_address.from_forwarded_for("1.2.3.4, 198.51.100.23"), "198.51.100.23", "last entry")
+      check.equal(client_address.from_forwarded_for("198.51.100.23"), "198.51.100.23", "single entry")
+      check.equal(client_address.from_forwarded_for("1.2.3.4,2001:db8::7"), "2001:db8::7", "IPv6")
+   end)
+
+   it("never falls back to an earlier entry when the last is not an address", function()
+      check.absent(client_address.from_forwarded_for("198.51.100.23, evil"), "garbage last")
+      check.absent(client_address.from_forwarded_for("198.51.100.23, 999.1.1.1"), "octet out of range")
+      check.absent(client_address.from_forwarded_for(""), "empty")
+      check.absent(client_address.from_forwarded_for(nil), "missing")
+   end)
+end)

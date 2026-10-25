@@ -1,0 +1,35 @@
+local check = require("tests.support.check")
+local client = require("tests.support.client")
+local digest = require("adapters.digest")
+local fake = require("tests.support.fake")
+local flows = require("tests.support.flows")
+local redis_admin = require("tests.support.redis_admin")
+
+describe("session fixation", function()
+   before_each(function()
+      fake.reset()
+      redis_admin.flush()
+   end)
+
+   it("issues a new id on every sign-in and deletes the one the browser brought", function()
+      local first = flows.session_cookie("seller-web", "seller@example.test")
+      local second_answer = flows.login("seller-web", "seller@example.test", flows.session(first))
+      check.equal(second_answer.status, 200, "second sign-in")
+
+      local second = client.cookie_value(second_answer, "__Host-kx_session")
+      check.differ(second, first, "a new id")
+      check.equal(#redis_admin.keys("edge:session:" .. digest.sha256_hex(first)), 0, "the old session is gone")
+
+      local old = client.edge("GET", "/bff/session", { cookie = flows.session(first) })
+      check.equal(client.flag(old, "authenticated"), false, "the old id is worthless")
+
+      local new = client.edge("GET", "/bff/session", { cookie = flows.session(second) })
+      check.equal(client.flag(new, "authenticated"), true, "the new id works")
+   end)
+
+   it("ignores an id an attacker planted, since sign-in never adopts the browser's value", function()
+      local planted = string.rep("P", 43)
+      local answer = flows.login("seller-web", "seller@example.test", flows.session(planted))
+      check.differ(client.cookie_value(answer, "__Host-kx_session"), planted, "not adopted")
+   end)
+end)

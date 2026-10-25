@@ -1,0 +1,37 @@
+name: kinetix-edge-toolchain
+
+services:
+  redis:
+    image: redis:7.2.15-alpine@sha256:05a97a479bc73de66f087dc05b569010772880f778cc8671fa6b8aadee32e5c6
+    command:
+      - redis-server
+      - --requirepass
+      - ci-ephemeral-not-a-deployed-credential
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "ci-ephemeral-not-a-deployed-credential", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  toolchain:
+    build:
+      context: ..
+      dockerfile: toolchain/Dockerfile
+    image: kinetix-edge-toolchain:local
+    working_dir: /workspace
+    environment:
+      EDGE_TEST_REDIS_HOST: redis
+      EDGE_TEST_REDIS_PORT: "6379"
+      EDGE_TEST_REDIS_ADMIN_PASSWORD: ci-ephemeral-not-a-deployed-credential
+      EDGE_TEST_REDIS_EDGE_PASSWORD: ci-ephemeral-edge-not-a-deployed-credential
+    volumes:
+      - ..:/workspace
+    depends_on:
+      redis:
+        condition: service_healthy

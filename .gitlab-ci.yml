@@ -1,0 +1,36 @@
+include:
+  - project: 'WildanFrananda/kinetix-infrastructure'
+    ref: main
+    file: '/ci/service-ci.yml'
+
+stages:
+  - verify
+  - build
+  - test
+
+variables:
+  EDGE_TEST_REDIS_HOST: redis
+  EDGE_TEST_REDIS_PORT: "6379"
+  EDGE_TEST_REDIS_ADMIN_PASSWORD: ci-ephemeral-not-a-deployed-credential
+  EDGE_TEST_REDIS_EDGE_PASSWORD: ci-ephemeral-edge-not-a-deployed-credential
+
+secret-scan:
+  extends: .secret-scan
+
+build-image:
+  extends: .build-image
+
+verify:
+  image: openresty/openresty:1.31.1.1-3-alpine-fat@sha256:df3b068317a76ef121686711d83990ec09c151e117d005d4d46b5458720afe29
+  stage: test
+  services:
+    - name: redis:7.2.15-alpine@sha256:05a97a479bc73de66f087dc05b569010772880f778cc8671fa6b8aadee32e5c6
+      alias: redis
+      command: ["redis-server", "--requirepass", "ci-ephemeral-not-a-deployed-credential", "--save", "", "--appendonly", "no"]
+  script:
+    - sh bin/install-toolchain compiler http test
+    - sh bin/ci
+    - sh bin/mutate
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

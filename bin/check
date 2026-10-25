@@ -1,0 +1,46 @@
+#!/bin/sh
+set -eu
+
+cd "$(dirname "$0")/.."
+
+command -v tl >/dev/null || {
+  echo "tl is not on PATH: run this as bin/dev bin/check" >&2
+  exit 1
+}
+
+sources="$(find src config -name '*.tl' | sort)"
+tests="$( [ -d tests ] && find tests -name '*.tl' | sort || true)"
+declarations="$(find declarations -name '*.d.tl' | sort)"
+
+failed=0
+
+if grep -nwE 'any' $sources $tests $declarations; then
+  echo "the type any is not allowed: type it" >&2
+  failed=1
+fi
+
+if grep -nE '^[[:space:]]*--|[[:space:]]--[[:space:]]' $sources $tests $declarations; then
+  echo "no comments in code: reasoning goes into CLAUDE.md or a test name" >&2
+  failed=1
+fi
+
+if awk 'length($0) > 120 { print FILENAME ":" FNR ": " length($0) " columns"; found = 1 } END { exit found }' \
+  $sources $tests $declarations tlconfig.lua; then
+  :
+else
+  echo "lines are at most 120 columns" >&2
+  failed=1
+fi
+
+if grep -nE '[[:space:]]+$' $sources $tests $declarations; then
+  echo "no trailing whitespace" >&2
+  failed=1
+fi
+
+tl check -q --global-env-def ngx $sources || failed=1
+
+if [ -n "$tests" ]; then
+  tl check -q --global-env-def test_env $tests || failed=1
+fi
+
+exit "$failed"

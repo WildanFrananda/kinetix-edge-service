@@ -1,0 +1,203 @@
+#!/bin/sh
+set -eu
+
+cd "$(dirname "$0")/.."
+
+: "${EDGE_TEST_REDIS_HOST:?bin/integration needs the toolchain Redis: run it as bin/dev bin/integration}"
+: "${EDGE_TEST_REDIS_PORT:?bin/integration needs the toolchain Redis: run it as bin/dev bin/integration}"
+: "${EDGE_TEST_REDIS_ADMIN_PASSWORD:?bin/integration needs the toolchain Redis: run it as bin/dev bin/integration}"
+: "${EDGE_TEST_REDIS_EDGE_PASSWORD:?bin/integration needs the toolchain Redis: run it as bin/dev bin/integration}"
+
+[ -f build/test/tests/run.lua ] || {
+  echo "no generated tests: run bin/build first" >&2
+  exit 1
+}
+
+only="${EDGE_TEST_ONLY:-}"
+
+redis_address="$(getent hosts "$EDGE_TEST_REDIS_HOST" | awk '{ print $1; exit }')"
+[ -n "$redis_address" ] || {
+  echo "cannot resolve $EDGE_TEST_REDIS_HOST" >&2
+  exit 1
+}
+export EDGE_TEST_REDIS_HOST="$redis_address"
+
+work="$(mktemp -d)"
+chmod 755 "$work"
+logs="build/integration-logs"
+rm -rf "$logs"
+mkdir -p "$logs"
+export EDGE_TEST_OBSERVED="$logs/observed-secrets.txt"
+: > "$EDGE_TEST_OBSERVED"
+
+running=""
+
+stop_all() {
+  for pid in $running; do
+    kill -QUIT "$pid" 2>/dev/null || true
+  done
+  for pid in $running; do
+    wait "$pid" 2>/dev/null || true
+  done
+  running=""
+}
+
+finish() {
+  stop_all
+  rm -rf "$work"
+}
+trap finish EXIT INT TERM
+
+resty_run() {
+  resty --errlog-level error -I build/lua -I build/test "$@"
+}
+
+wait_for() {
+  tries=0
+  until curl -fsS -o /dev/null "$1" 2>/dev/null; do
+    tries=$((tries + 1))
+    if [ "$tries" -gt 100 ]; then
+      echo "$1 never answered" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+}
+
+prefix() {
+  mkdir -p "$1/conf" "$1/logs" "$1/temp"
+}
+
+start_fakes() {
+  prefix "$work/fakes"
+  cp tests/integration/fakes/nginx.conf "$work/fakes/conf/nginx.conf"
+  cp -R build/test "$work/fakes/lua"
+  openresty -p "$work/fakes/" -c conf/nginx.conf 2>>"$logs/fakes.log" &
+  running="$running $!"
+  wait_for http://127.0.0.1:18001/__fake/state
+  wait_for http://127.0.0.1:18002/api/ready
+}
+
+edge_environment() {
+  export EDGE_REDIS_HOST="$redis_address"
+  export EDGE_REDIS_PORT="$EDGE_TEST_REDIS_PORT"
+  export EDGE_REDIS_USER=edge
+  export EDGE_REDIS_PASSWORD="$EDGE_TEST_REDIS_EDGE_PASSWORD"
+  export IDENTITY_HTTP_URL=http://127.0.0.1:18001
+  export EDGE_API_UPSTREAM=http://127.0.0.1:18002
+  export KINETIX_BACKOFFICE_HOST=backoffice.localhost:8443
+  export KINETIX_SELLER_HOST=seller.localhost:8443
+  export KINETIX_SERVICE_VERSION=itest-0123abc
+}
+
+start_edge() {
+  name="$1"
+  edge="$work/edge-$name"
+  rm -rf "$edge"
+  prefix "$edge"
+  cp nginx/nginx.conf "$edge/conf/nginx.conf"
+  cp -R build/lua "$edge/lua"
+  if [ "$name" = short ]; then
+    cp build/test/tests/integration/overrides/config/lifetimes.lua "$edge/lua/config/lifetimes.lua"
+  fi
+  openresty -p "$edge/" -c conf/nginx.conf 2>>"$logs/edge.log" &
+  edge_pid=$!
+  running="$running $edge_pid"
+  wait_for http://127.0.0.1:8080/health
+}
+
+stop_edge() {
+  kill -QUIT "$edge_pid" 2>/dev/null || true
+  wait "$edge_pid" 2>/dev/null || true
+  running="$(echo "$running" | sed "s/ $edge_pid//")"
+}
+
+specs_of() {
+  scenario="$1"
+  for spec in $(find "build/test/tests/integration/$scenario" -name '*_spec.lua' | sort); do
+    if [ -z "$only" ]; then
+      echo "$spec"
+      continue
+    fi
+    for wanted in $only; do
+      case "$spec" in
+        */"$wanted"_spec.lua) echo "$spec" ;;
+      esac
+    done
+  done
+}
+
+failed=0
+
+run_scenario() {
+  scenario="$1"
+  specs="$(specs_of "$scenario")"
+  [ -n "$specs" ] || return 0
+
+  echo "== scenario $scenario"
+  start_edge "$scenario"
+  resty_run build/test/tests/run.lua --output=utfTerminal $specs || failed=1
+  stop_edge
+}
+
+refuses_to_start() {
+  label="$1"
+  shift
+  output="$(env "$@" timeout 10 openresty -p "$work/startup/" -c conf/nginx.conf 2>&1)" && status=0 || status=$?
+  if [ "$status" -eq 0 ] || ! echo "$output" | grep -q "$label"; then
+    echo "startup: expected a refusal naming '$label', got exit $status: $output" >&2
+    failed=1
+    return
+  fi
+  echo "startup refuses: $label"
+}
+
+check_startup() {
+  prefix "$work/startup"
+  cp nginx/nginx.conf "$work/startup/conf/nginx.conf"
+  cp -R build/lua "$work/startup/lua"
+  for variable in EDGE_REDIS_HOST EDGE_REDIS_PORT EDGE_REDIS_USER EDGE_REDIS_PASSWORD IDENTITY_HTTP_URL \
+    EDGE_API_UPSTREAM KINETIX_BACKOFFICE_HOST KINETIX_SELLER_HOST KINETIX_SERVICE_VERSION; do
+    refuses_to_start "$variable is required" -u "$variable"
+  done
+  refuses_to_start "KINETIX_SERVICE_VERSION must identify a build" KINETIX_SERVICE_VERSION=unknown
+  refuses_to_start "EDGE_REDIS_PORT must be a TCP port" EDGE_REDIS_PORT=redis
+}
+
+check_logs() {
+  forbidden="__Host-kx fake-access fake-refresh fake-challenge fake-enrolment @example.test correct-password 123456 JBSWY3DPEHPK3PXP $EDGE_TEST_REDIS_EDGE_PASSWORD"
+  for needle in $forbidden; do
+    if grep -qF -- "$needle" "$logs/edge.log"; then
+      echo "the edge logged something it must never log ($needle)" >&2
+      failed=1
+    fi
+  done
+  while IFS= read -r secret; do
+    [ -n "$secret" ] || continue
+    if grep -qF -- "$secret" "$logs/edge.log"; then
+      echo "the edge logged a cookie value" >&2
+      failed=1
+    fi
+  done < "$EDGE_TEST_OBSERVED"
+  echo "logs: $(grep -c '"event":"request"' "$logs/edge.log" || true) request lines, none with a cookie, token, email, password or code"
+}
+
+resty_run build/test/tests/integration/tools/provision_redis.lua
+start_fakes
+edge_environment
+: > "$logs/edge.log"
+
+run_scenario main
+run_scenario short
+
+real_port="$EDGE_REDIS_PORT"
+export EDGE_REDIS_PORT=1
+run_scenario redis_down
+export EDGE_REDIS_PORT="$real_port"
+
+if [ -z "$only" ]; then
+  check_startup
+  check_logs
+fi
+
+exit "$failed"

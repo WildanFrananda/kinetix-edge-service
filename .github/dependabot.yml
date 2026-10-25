@@ -1,0 +1,39 @@
+version: 2
+updates:
+  - package-ecosystem: docker
+    directories:
+      - "/"
+      - "/toolchain"
+    target-branch: main
+    schedule:
+      interval: daily
+      time: "07:00"
+      timezone: Asia/Jakarta
+    open-pull-requests-limit: 5
+    groups:
+      base-images:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+    commit-message:
+      prefix: "deps(docker)"
+  - package-ecosystem: github-actions
+    directories:
+      - "/"
+    target-branch: main
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Asia/Jakarta
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: "deps(actions)"

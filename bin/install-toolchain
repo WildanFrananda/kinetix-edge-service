@@ -1,0 +1,79 @@
+#!/bin/sh
+set -eu
+
+ROCKS=https://luarocks.org
+
+usage() {
+  echo "usage: bin/install-toolchain <compiler|http|test>..." >&2
+  exit 64
+}
+
+[ "$#" -ge 1 ] || usage
+
+command -v luarocks >/dev/null || {
+  echo "luarocks is not on PATH: run this in the OpenResty fat image" >&2
+  exit 1
+}
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+fetch() {
+  curl -fsSL --retry 3 -o "$2" "$1"
+  echo "$3  $2" | sha256sum -c -
+}
+
+rock() {
+  fetch "$ROCKS/$1.src.rock" "$work/$1.src.rock" "$2"
+  luarocks install --deps-mode=none "$work/$1.src.rock"
+}
+
+github_rock() {
+  fetch "$ROCKS/$1.rockspec" "$work/$1.rockspec" "$2"
+  fetch "$3" "$work/$1.tar.gz" "$4"
+  mkdir -p "$work/$1"
+  tar -xzf "$work/$1.tar.gz" -C "$work/$1" --strip-components=1
+  (cd "$work/$1" && luarocks make --deps-mode=none "$work/$1.rockspec")
+}
+
+install_compiler() {
+  rock compat53-0.15.1-1 c9e34ea62ac89a6b7ab62333a990b47b1dd37e02f00b0309e6a31511fd5b8806
+  rock argparse-0.7.2-1 c122a25224876e93bd380ceb51af28cd8a72296e098b2eed4f06d85f54f1a0b4
+  rock tl-0.24.8-1 61a98433b83fb8ae708f8ed348f5deb35a476d09c20404ce321f49757f17c90e
+  tl --version
+}
+
+install_http() {
+  rock lua-resty-http-0.18.0-0 9059fb963c1db4a2328b65307f5b09fd0decfa414da7bf842d95795e845d6827
+}
+
+install_test() {
+  rock luafilesystem-1.9.0-1 3de68d619f6ad95a27f4728814375447d921305194b7050dee6199057c31282f
+  rock penlight-1.15.0-1 ba138b8bbc916f42adb5b876c48d254114f416e8867902f8c34fea2788140973
+  rock lua_cliargs-3.0.2-1 a2dfbd3f0236eaf4b0421dbd06a631d92b550335eb263b7283e1161a6e90d92e
+  rock luasystem-0.7.1-1 8c117ec62b223333d8494c5dd2158bffb972ac7cf501ac8d0eb0e856211383ed
+  rock dkjson-2.11-1 ddf3444076d3cf9a63dd797e56cbcf764e0d121de8456bc23a7d7acb4dcb1506
+  rock say-1.4.1-3 90a1c0253ec38d6628007eef0b424d0707d0f3e0442fce478a627111eb02bb07
+  rock luassert-1.9.0-1 146a7b2ec8e0cadf7dbca6dc993debcd2090e0e4fdf5c632d9f4ec20670357dd
+  github_rock \
+    lua-term-0.8-1 \
+    401fdb79f234a0904805d68cf9afb3b904fc7539347fe6432d0c6ad487a4489c \
+    https://github.com/hoelzro/lua-term/archive/0.08.tar.gz \
+    8ff94f390ea9d98c734699373ca3b0ce500d651b2ab1cb8d7d2336fc5b79cded
+  github_rock \
+    mediator_lua-1.1.2-0 \
+    751debefe0aa00fa93c0ae6371922055289e9948b0231d1430c214118fdb3f3b \
+    https://github.com/Olivine-Labs/mediator_lua/archive/v1.1.2-0.tar.gz \
+    faf5859fd2081be4e9e4fb8873a2dc65f7eff3fd93d6dd14da65f8e123fcff9b
+  rock busted-2.3.0-1 4dabcc22c9610a0d7269cfe68318d68ed9a2daaeeddddc0f68b873af9883e72e
+  busted --version
+}
+
+for set in "$@"; do
+  case "$set" in
+    compiler) install_compiler ;;
+    http) install_http ;;
+    test) install_test ;;
+    *) usage ;;
+  esac
+done

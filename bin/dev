@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+
+cd "$(dirname "$0")/.."
+
+case "${1:-}" in
+  down)
+    exec docker compose -f toolchain/compose.yaml down --volumes
+    ;;
+  "")
+    echo "usage: bin/dev <command...> | bin/dev down" >&2
+    exit 64
+    ;;
+esac
+
+if [ "${KINETIX_EDGE_TOOLCHAIN_PREBUILT:-}" != "1" ]; then
+  docker compose -f toolchain/compose.yaml build --quiet toolchain >&2
+fi
+
+if [ -t 0 ] && [ -t 1 ]; then
+  exec docker compose -f toolchain/compose.yaml run --rm toolchain "$@"
+fi
+
+exec docker compose -f toolchain/compose.yaml run --rm -T toolchain "$@"

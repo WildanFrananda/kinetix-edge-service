@@ -1,0 +1,88 @@
+#!/bin/sh
+set -eu
+
+cd "$(dirname "$0")/.."
+
+: "${EDGE_TEST_REDIS_HOST:?bin/mutate runs the integration suite: run it as bin/dev bin/mutate}"
+
+[ -f build/test/tests/mutation/catalogue.lua ] || {
+  echo "no generated tests: run bin/build first" >&2
+  exit 1
+}
+
+describe() {
+  resty --errlog-level error -I build/lua -I build/test build/test/tests/mutation/describe.lua "$@"
+}
+
+work="$(mktemp -d)"
+chmod 755 "$work"
+trap 'rm -rf "$work"' EXIT INT TERM
+
+report="build/mutation-report.txt"
+: > "$report"
+
+wanted="${*:-$(describe)}"
+killed=0
+survived=0
+broken=0
+
+for id in $wanted; do
+  mutant="$work/$id"
+  mkdir -p "$mutant"
+  cp -R bin config declarations nginx src tests tlconfig.lua build "$mutant/"
+
+  if ! file="$(resty --errlog-level error -I build/lua -I build/test build/test/tests/mutation/apply.lua "$id" "$mutant")"
+  then
+    echo "BROKEN    $id: the code to mutate is not in the source exactly once" | tee -a "$report"
+    broken=$((broken + 1))
+    rm -rf "$mutant"
+    continue
+  fi
+  case "$file" in
+    src/*) module="${file#src/}" ;;
+    *) module="$file" ;;
+  esac
+
+  if ! (cd "$mutant" && tl check -q --global-env-def ngx "$file" >/dev/null 2>&1 \
+    && tl gen -q --gen-target 5.1 --gen-compat off -o "build/lua/${module%.tl}.lua" "$file"); then
+    echo "BROKEN    $id: the mutant does not compile" | tee -a "$report"
+    broken=$((broken + 1))
+    rm -rf "$mutant"
+    continue
+  fi
+
+  red=""
+  unit="$(describe "$id" unit)"
+  if [ -n "$unit" ]; then
+    files=""
+    for name in $unit; do
+      files="$files build/test/tests/unit/${name}_spec.lua"
+    done
+    if ! (cd "$mutant" && resty --errlog-level error --shdict "edge_metrics 1m" -I build/lua -I build/test \
+      build/test/tests/run.lua --output=TAP $files >"$mutant/unit.log" 2>&1); then
+      red=" unit($unit)"
+    fi
+  fi
+
+  integration="$(describe "$id" integration)"
+  if [ -n "$integration" ]; then
+    if ! (cd "$mutant" && EDGE_TEST_ONLY="$integration" sh bin/integration >"$mutant/integration.log" 2>&1); then
+      red="$red integration($integration)"
+    fi
+  fi
+
+  if [ -n "$red" ]; then
+    first="$(grep -h -m1 -E '^not ok|Failure|Error' "$mutant/unit.log" "$mutant/integration.log" 2>/dev/null | head -1 || true)"
+    echo "KILLED    $id: $(describe "$id") -> red in$red; $first" | tee -a "$report"
+    killed=$((killed + 1))
+  else
+    echo "SURVIVED  $id: $(describe "$id")" | tee -a "$report"
+    survived=$((survived + 1))
+  fi
+
+  rm -rf "$mutant"
+done
+
+echo "mutants: $killed killed, $survived survived, $broken did not compile" | tee -a "$report"
+
+[ "$survived" -eq 0 ] && [ "$broken" -eq 0 ]

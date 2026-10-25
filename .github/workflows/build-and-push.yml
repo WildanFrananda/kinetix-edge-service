@@ -1,0 +1,113 @@
+name: Build and push
+
+# Merge to main only. The image is built once here, scanned, and pushed as
+# ghcr.io/<owner>/<repo>:<git sha>. A release tag later promotes this exact digest — nothing is ever
+# built from a tag, so the artifact that was scanned is the artifact that runs.
+# (kinetix-infrastructure/docs/STAGING-DEPLOYMENT-PLAN.md §6)
+#
+# This file is identical in all eleven image repositories. The image name is derived from the
+# repository and lowercased, because GHCR rejects an uppercase path while GitHub keeps the owner's
+# capitalisation.
+#
+# GitLab is not paired here on purpose: exactly one CI may build and deploy a release, and that is
+# GitHub (§6). The GitLab mirror verifies merge requests and pushes nothing.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One build per ref, and never cancelled: an interrupted push leaves a tag pointing at nothing.
+concurrency:
+  group: build-and-push-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Name the image
+        run: echo "IMAGE=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Loaded into the local daemon first, and pushed only after the scan, so what is published is
+      # exactly the bytes that were examined. `provenance: false` keeps the result a plain image:
+      # an attestation manifest would make the digest below point at an index rather than the image
+      # production pulls.
+      - name: Build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          build-args: |
+            KINETIX_SERVICE_VERSION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      # kinetix_build_info reports this, and prod-deploy's metrics conformance refuses
+      # version="unknown"; the service itself refuses to start without it.
+      - name: The image must know which build it is
+        run: |
+          baked="$(docker run --rm --entrypoint printenv "$IMAGE:${{ github.sha }}" KINETIX_SERVICE_VERSION)"
+          [ "$baked" = "${{ github.sha }}" ] || {
+            echo "KINETIX_SERVICE_VERSION is '$baked', not ${{ github.sha }}"
+            exit 1
+          }
+
+      # CRITICAL only, and only where a fix exists. A finding nobody can act on today would block
+      # every deploy without making anything safer; it belongs in the dependency audit instead.
+      - name: Scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ github.sha }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      - name: SBOM
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ github.sha }}
+          scan-type: image
+          format: spdx-json
+          output: sbom.spdx.json
+          exit-code: "0"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.sha }}
+          path: sbom.spdx.json
+          retention-days: 30
+
+      # The digest is what a release promotes, so it is printed into the run summary where the tag
+      # workflow — and a person — can read which bytes this commit produced.
+      - name: Push
+        run: |
+          docker push "$IMAGE:${{ github.sha }}"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:${{ github.sha }}" | cut -d@ -f2)"
+          {
+            echo "### Pushed"
+            echo ""
+            echo '```'
+            echo "$IMAGE:${{ github.sha }}"
+            echo "$IMAGE@$digest"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

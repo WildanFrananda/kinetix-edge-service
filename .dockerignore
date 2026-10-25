@@ -1,0 +1,10 @@
+.git
+.github
+.gitlab-ci.yml
+.env
+.env.*
+!.env.example
+build
+tests
+toolchain
+*.md

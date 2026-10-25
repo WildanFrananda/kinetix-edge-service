@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+
+cd "$(dirname "$0")/.."
+
+[ -f build/test/tests/run.lua ] || {
+  echo "no generated tests: run bin/build first" >&2
+  exit 1
+}
+
+exec resty --errlog-level error \
+  --shdict "edge_metrics 1m" \
+  -I build/lua \
+  -I build/test \
+  build/test/tests/run.lua \
+  --output=utfTerminal \
+  "$@" \
+  build/test/tests/unit

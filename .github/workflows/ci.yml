@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: The toolchain image the laptop runs, layers from the Actions cache
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: toolchain/Dockerfile
+          load: true
+          tags: kinetix-edge-toolchain:local
+          cache-from: type=gha,scope=toolchain
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,scope=toolchain,ignore-error=true' || '' }}
+          provenance: false
+
+      - name: tl check, unit, and integration against real OpenResty and real Redis
+        env:
+          KINETIX_EDGE_TOOLCHAIN_PREBUILT: "1"
+        run: sh bin/dev sh bin/ci
+
+      - name: Every security check, mutated once, turns a test red
+        env:
+          KINETIX_EDGE_TOOLCHAIN_PREBUILT: "1"
+        run: sh bin/dev sh bin/mutate
+
+      - if: always()
+        run: sh bin/dev down
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: The production image builds
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: kinetix-edge-service:ci
+          build-args: |
+            KINETIX_SERVICE_VERSION=${{ github.sha }}
+          cache-from: type=gha
+          provenance: false
+
+      - name: The image runs as a user, carries generated Lua only, knows its build and refuses to start unconfigured
+        run: |
+          user="$(docker image inspect -f '{{.Config.User}}' kinetix-edge-service:ci)"
+          [ "$user" = edge ] || { echo "the image runs as '$user'"; exit 1; }
+          if docker run --rm --entrypoint sh kinetix-edge-service:ci -c 'ls -a / /opt/edge' | grep -qE '^\.(git|env)$'; then
+            echo "the image carries .git or .env"
+            exit 1
+          fi
+          [ "$(docker run --rm --entrypoint sh kinetix-edge-service:ci -c 'find /opt/edge -name "*.tl" | wc -l')" = 0 ]
+          [ "$(docker run --rm --entrypoint printenv kinetix-edge-service:ci KINETIX_SERVICE_VERSION)" = "${{ github.sha }}" ]
+          if output="$(docker run --rm kinetix-edge-service:ci 2>&1)"; then
+            echo "the image started without its configuration"
+            exit 1
+          fi
+          echo "$output" | grep -q "EDGE_REDIS_PASSWORD is required"
+
+  verify:
+    needs: [gate, image]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: The gate and the image both passed
+        run: test "${{ needs.gate.result }}" = success && test "${{ needs.image.result }}" = success

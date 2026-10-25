@@ -1,0 +1,35 @@
+#!/bin/sh
+set -eu
+
+cd "$(dirname "$0")/.."
+
+sh bin/check
+
+rm -rf build
+
+generate() {
+  out="$1"
+  shift
+  for file in "$@"; do
+    case "$file" in
+      src/*) module="${file#src/}" ;;
+      *) module="$file" ;;
+    esac
+    target="$out/${module%.tl}.lua"
+    mkdir -p "$(dirname "$target")"
+    tl gen -q --gen-target 5.1 --gen-compat off -o "$target" "$file"
+  done
+}
+
+generate build/lua $(find src config -name '*.tl' | sort)
+if grep -rnE 'math\.type|utf8\.' build/lua; then
+  echo "the generated Lua calls what LuaJIT does not have (an 'is integer' test, or utf8)" >&2
+  exit 1
+fi
+
+echo "generated $(find build/lua -name '*.lua' | wc -l | tr -d ' ') service modules"
+
+if [ -d tests ]; then
+  generate build/test $(find tests -name '*.tl' | sort)
+  echo "generated $(find build/test -name '*.lua' | wc -l | tr -d ' ') test modules"
+fi

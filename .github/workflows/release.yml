@@ -1,0 +1,94 @@
+name: Release
+
+# Creating a tag is what starts a deploy (the user's rule, 2026-09-14;
+# kinetix-infrastructure/docs/STAGING-DEPLOYMENT-PLAN.md §6).
+#
+# This workflow builds nothing. The merge to main already built, scanned and pushed
+# ghcr.io/<owner>/<repo>:<git sha>; a release only points vX.Y.Z at that same digest and asks
+# kinetix-infrastructure to deploy it. So the artifact that was scanned is the artifact that runs, and a
+# tag on a commit whose build failed or never ran fails here rather than quietly building something new.
+#
+# This file is identical in all eleven image repositories.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: the ancestry check below needs it.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Name the image
+        run: echo "IMAGE=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: The tag must be semver
+        run: |
+          echo "${{ github.ref_name }}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "release tags are vMAJOR.MINOR.PATCH; got ${{ github.ref_name }}"; exit 1; }
+
+      # A tag on a branch nobody reviewed would deploy code that never passed the merge gate.
+      - name: The tagged commit must be reachable from main
+        run: |
+          # No --depth: `actions/checkout` above already uses fetch-depth: 0, so the history is
+          # complete and this only needs origin/main to exist as a ref. `--depth=0` is not "all
+          # of it" — git rejects it outright with "depth 0 is not a positive number", which is
+          # how the first release tag ever cut died before it promoted anything.
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "$GITHUB_SHA is not on main — cut releases from main only"; exit 1; }
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Fails when the merge build never ran or failed. That is the intended end of the road: CD never
+      # falls back to building, because a rebuild is a different artifact from the one that was scanned.
+      - name: Find the image this commit produced
+        id: image
+        run: |
+          if ! digest="$(docker buildx imagetools inspect "$IMAGE:$GITHUB_SHA" --format '{{ .Manifest.Digest }}' 2>/dev/null)"; then
+            echo "no image for $GITHUB_SHA — the merge build must be green before a tag can be released"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "$IMAGE@$digest" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Point the release tag at that digest
+        run: |
+          docker buildx imagetools create \
+            --tag "$IMAGE:${{ github.ref_name }}" \
+            "$IMAGE@${{ steps.image.outputs.digest }}"
+
+      # kinetix-infrastructure owns the server. Service repositories never SSH anywhere; they ask, and one
+      # serialized pipeline there does the work.
+      - name: Ask kinetix-infrastructure to deploy it
+        env:
+          GH_TOKEN: ${{ secrets.KINETIX_DISPATCH_TOKEN }}
+        run: |
+          # "not set" was the original wording and it sent the first real release hunting for a
+          # missing secret that was in fact present. `gh secret list` shows a name whatever the value
+          # is, so a secret stored as an empty string looks identical to a correct one from outside.
+          if [ -z "$GH_TOKEN" ]; then
+            echo "KINETIX_DISPATCH_TOKEN resolved to an empty value."
+            echo "The secret may exist and still be empty — a name in \`gh secret list\` proves nothing"
+            echo "about its contents. Re-set it: docs/DISPATCH-TOKEN.md section 3, then check with"
+            echo "section 4, which sends a dispatch using the token itself."
+            exit 1
+          fi
+          jq -n \
+            --arg service "${{ github.event.repository.name }}" \
+            --arg tag "${{ github.ref_name }}" \
+            --arg digest "${{ steps.image.outputs.digest }}" \
+            '{event_type: "deploy", client_payload: {service: $service, tag: $tag, digest: $digest}}' \
+          | gh api "repos/${{ github.repository_owner }}/kinetix-infrastructure/dispatches" --input -
