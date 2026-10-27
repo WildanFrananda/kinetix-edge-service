@@ -79,6 +79,69 @@ describe("sign-in with a second factor", function()
       check.equal(client.text(replay, "error"), "SIGN_IN_REQUIRED", "code")
    end)
 
+   it("ends the pending sign-in when identity says the challenge's attempts are used", function()
+      local pending = client.cookie_value(flows.login("backoffice", "admin-2fa@example.test", nil), "__Host-kx_pending")
+      for attempt = 1, 5 do
+         local wrong = verify("backoffice", pending, "000000")
+         check.equal(client.text(wrong, "error"), "CODE_REFUSED", "wrong code " .. string.format("%d", attempt))
+      end
+
+      local exhausted = verify("backoffice", pending, scenario.code)
+      check.equal(exhausted.status, 401, "status")
+      check.equal(client.text(exhausted, "error"), "SIGN_IN_REQUIRED", "code")
+      check.equal(
+         client.set_cookie(exhausted, "__Host-kx_pending"),
+         "__Host-kx_pending=" .. ATTRIBUTES .. "; Max-Age=0",
+         "pending cookie expired"
+      )
+      check.equal(#redis_admin.keys("edge:pending:*"), 0, "pending gone")
+   end)
+
+   it("ends the pending sign-in when identity says the challenge was already used", function()
+      local pending = client.cookie_value(flows.login("backoffice", "admin-2fa@example.test", nil), "__Host-kx_pending")
+      local spent = client.call(
+         scenario.identity_url,
+         "POST",
+         "/api/v1/auth/2fa/verify",
+         { ["Content-Type"] = "application/json", ["X-Kinetix-Client"] = "backoffice" },
+         client.json({ challengeToken = fake.issued("challenge"), code = scenario.code })
+      )
+      check.equal(spent.status, 200, "the challenge was answered elsewhere")
+
+      local answer = verify("backoffice", pending, scenario.code)
+      check.equal(answer.status, 401, "status")
+      check.equal(client.text(answer, "error"), "SIGN_IN_REQUIRED", "code")
+      check.present(client.set_cookie(answer, "__Host-kx_pending"), "pending cookie expired")
+      check.equal(#redis_admin.keys("edge:pending:*"), 0, "pending gone")
+   end)
+
+   it("ends the pending sign-in when identity does not know the challenge", function()
+      local pending = client.cookie_value(flows.login("backoffice", "admin-2fa@example.test", nil), "__Host-kx_pending")
+      redis_admin.set_field("edge:pending:" .. digest.sha256_hex(pending), "token", "fake-challenge-unknown")
+
+      local answer = verify("backoffice", pending, scenario.code)
+      check.equal(answer.status, 401, "status")
+      check.equal(client.text(answer, "error"), "SIGN_IN_REQUIRED", "code")
+      check.equal(#redis_admin.keys("edge:pending:*"), 0, "pending gone")
+   end)
+
+   it("keeps today's mapping for an identity whose refusals carry no code", function()
+      fake.configure({ verify_codes = "off" })
+      local pending = client.cookie_value(flows.login("backoffice", "admin-2fa@example.test", nil), "__Host-kx_pending")
+      client.call(
+         scenario.identity_url,
+         "POST",
+         "/api/v1/auth/2fa/verify",
+         { ["Content-Type"] = "application/json", ["X-Kinetix-Client"] = "backoffice" },
+         client.json({ challengeToken = fake.issued("challenge"), code = scenario.code })
+      )
+
+      local answer = verify("backoffice", pending, scenario.code)
+      check.equal(answer.status, 401, "status")
+      check.equal(client.text(answer, "error"), "CODE_REFUSED", "code")
+      check.equal(#redis_admin.keys("edge:pending:*"), 1, "pending kept")
+   end)
+
    it("asks for a sign-in when there is no pending one", function()
       local answer = verify("backoffice", nil, scenario.code)
       check.equal(answer.status, 401, "status")

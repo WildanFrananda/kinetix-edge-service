@@ -7,6 +7,7 @@ local record identity
 end
 
 local CODE = "123456"
+local CHALLENGE_ATTEMPTS = 5
 local CLIENTS: {string: boolean} = { ["backoffice"] = true, ["seller-web"] = true }
 
 local users: {string: FakeUser} = {}
@@ -32,6 +33,8 @@ local function seed()
       refresh_delay_ms = 0,
       login_mode = "ok",
       logout_mode = "ok",
+      register_mode = "ok",
+      verify_codes = "on",
       access_expires_in = 900,
       roles = {},
    }
@@ -62,7 +65,15 @@ seed()
 local function next_token(kind: string, email: string, family: string, client: string): string
    sequence = sequence + 1
    local value = "fake-" .. kind .. "-" .. string.format("%d", sequence)
-   tokens[value] = { kind = kind, email = email, family = family, client = client, spent = false, revoked = false }
+   tokens[value] = {
+      kind = kind,
+      email = email,
+      family = family,
+      client = client,
+      spent = false,
+      revoked = false,
+      attempts = 0,
+   }
    issued[kind] = value
 
    return value
@@ -134,9 +145,9 @@ local function role_of(user: FakeUser): string
    return settings.roles[user.email] or user.role
 end
 
-local function pair(user: FakeUser, family: string, client: string)
+local function pair(user: FakeUser, family: string, client: string, status: integer)
    answer(
-      200,
+      status,
       {
          accessToken = next_token("access", user.email, family, client),
          refreshToken = next_token("refresh", user.email, family, client),
@@ -214,7 +225,15 @@ local function login()
    end
 
    sequence = sequence + 1
-   pair(user, "family-" .. string.format("%d", sequence), ngx.var.http_x_kinetix_client)
+   pair(user, "family-" .. string.format("%d", sequence), ngx.var.http_x_kinetix_client, 200)
+end
+
+local function challenge_refused(code: string, message: string)
+   if settings.verify_codes == "off" then
+      return refuse(401, "Unauthorized", message)
+   end
+
+   answer(401, { error = code, message = message, traceId = ngx.var.http_x_request_id or "-" })
 end
 
 local function verify()
@@ -227,17 +246,91 @@ local function verify()
 
    local document = body()
    local token = tokens[text(document, "challengeToken") or ""]
-   if token == nil or token.kind ~= "challenge" or token.spent then
-      return refuse(401, "Unauthorized", "This is not a two-factor challenge")
+   if token == nil or token.kind ~= "challenge" then
+      return challenge_refused("CHALLENGE_INVALID", "This is not a two-factor challenge")
+   end
+
+   if token.spent then
+      return challenge_refused("CHALLENGE_SPENT", "This two-factor challenge was already used")
+   end
+
+   if token.attempts >= CHALLENGE_ATTEMPTS then
+      return challenge_refused("CHALLENGE_EXHAUSTED", "Too many wrong codes for this challenge. Sign in again")
    end
 
    if text(document, "code") ~= CODE then
-      return refuse(401, "Unauthorized", "That code is not valid")
+      token.attempts = token.attempts + 1
+      return challenge_refused("WRONG_CODE", "That code is not valid")
    end
 
    token.spent = true
    sequence = sequence + 1
-   pair(users[token.email], "family-" .. string.format("%d", sequence), ngx.var.http_x_kinetix_client)
+   pair(users[token.email], "family-" .. string.format("%d", sequence), ngx.var.http_x_kinetix_client, 200)
+end
+
+local function registration_refusal(email: string, password: string): {string}
+   local problems: {string} = {}
+   if email == nil or string.find(email, "@", 1, true) == nil then
+      table.insert(problems, "email must be an email")
+   end
+
+   if password == nil or #password < 12 then
+      table.insert(problems, "password must be longer than or equal to 12 characters")
+   elseif #password > 72 then
+      table.insert(problems, "password must be at most 72 bytes, which is all bcrypt reads")
+   end
+
+   return problems
+end
+
+local function register()
+   count("register")
+   remember("register")
+
+   if settings.register_mode == "close" then
+      return ngx.exit(444)
+   end
+
+   if settings.register_mode == "unavailable" then
+      return refuse(503, "DATABASE_UNAVAILABLE", "identity could not reach its database.")
+   end
+
+   if client_refused() then
+      return
+   end
+
+   local document = body()
+   local email = text(document, "email")
+   local password = text(document, "password")
+   if email == "throttled@example.test" then
+      ngx.header["Retry-After"] = "60"
+      return refuse(429, "REQUEST_REFUSED", "ThrottlerException: Too Many Requests")
+   end
+
+   local problems = registration_refusal(email, password)
+   if #problems > 0 then
+      return answer(
+         400,
+         { statusCode = 400, message = problems, error = "Bad Request", traceId = ngx.var.http_x_request_id or "-" }
+      )
+   end
+
+   if users[email] ~= nil then
+      return refuse(409, "Conflict", "Email address is already registered")
+   end
+
+   sequence = sequence + 1
+   local user: FakeUser = {
+      id = 200 + sequence,
+      email = email,
+      password = password,
+      role = "customer",
+      principal_id = "prn_fake_" .. string.format("%d", 200 + sequence),
+      two_factor = false,
+      secret_issued = false,
+   }
+   users[email] = user
+   pair(user, "family-" .. string.format("%d", sequence), ngx.var.http_x_kinetix_client, 201)
 end
 
 local function enrolment_user(): FakeUser
@@ -357,7 +450,7 @@ local function refresh()
    end
 
    token.spent = true
-   pair(users[token.email], token.family, token.client)
+   pair(users[token.email], token.family, token.client, 200)
 end
 
 local function logout()
@@ -461,6 +554,16 @@ local function configure()
       settings.logout_mode = logout_mode
    end
 
+   local register_mode = text(document, "register_mode")
+   if register_mode ~= nil then
+      settings.register_mode = register_mode
+   end
+
+   local verify_codes = text(document, "verify_codes")
+   if verify_codes ~= nil then
+      settings.verify_codes = verify_codes
+   end
+
    local delay = document["refresh_delay_ms"]
    if delay is number then
       settings.refresh_delay_ms = math.floor(delay)
@@ -485,6 +588,7 @@ end
 
 local ROUTES: {string: function()} = {
    ["/api/v1/auth/login"] = login,
+   ["/api/v1/auth/register"] = register,
    ["/api/v1/auth/2fa/verify"] = verify,
    ["/api/v1/auth/refresh"] = refresh,
    ["/api/v1/auth/logout"] = logout,

@@ -13,6 +13,10 @@ describe("logout", function()
       redis_admin.flush()
    end)
 
+   after_each(function()
+      redis_admin.edge_command("+del")
+   end)
+
    it("logs out at identity with the refresh token, deletes the session and expires both cookies", function()
       local value = flows.session_cookie("seller-web", "seller@example.test")
       local access = fake.issued("access")
@@ -54,6 +58,19 @@ describe("logout", function()
 
       local state = client.edge("GET", "/bff/session", { cookie = flows.session(value) })
       check.equal(client.flag(state, "authenticated"), true, "session kept")
+   end)
+
+   it("answers 204 and expires both cookies when identity logged out but the session could not be deleted", function()
+      local value = flows.session_cookie("seller-web", "seller@example.test")
+      local refresh = fake.issued("refresh")
+      redis_admin.edge_command("-del")
+
+      local answer = client.edge("POST", "/bff/logout", { cookie = flows.session(value) })
+      redis_admin.edge_command("+del")
+      check.equal(answer.status, 204, "status: the tokens are revoked, so the user is signed out")
+      check.equal(answer.set_cookies[1], EXPIRED_SESSION, "session cookie expired")
+      check.equal(answer.set_cookies[2], EXPIRED_PENDING, "pending cookie expired")
+      check.truthy(fake.revoked(refresh), "identity ended the family")
    end)
 
    it("succeeds without a session, expiring whatever cookies there were", function()

@@ -7,6 +7,7 @@ local logger = require("adapters.logger")
 local metrics = require("adapters.metrics")
 local redis = require("resty.redis")
 local redis_store = require("adapters.redis_store")
+local revocation = require("http.revocation")
 local secure_random = require("adapters.secure_random")
 local settings = require("http.settings")
 local timing = require("config.timing")
@@ -19,6 +20,7 @@ local type RefreshResult = require("types.refresh_result")
 local type RequestContext = require("types.request_context")
 local type Session = require("types.session")
 local type SessionLookup = require("types.session_lookup")
+local type SessionState = require("types.session_state")
 local type TokenGrant = require("types.token_grant")
 
 local record sessions
@@ -38,13 +40,6 @@ local FIELDS: {string} = {
    "created_at",
    "last_seen",
    "absolute_end",
-}
-
-local CLIENT_CONFIGURATION_REFUSALS: {string: boolean} = {
-   ["UNKNOWN_CLIENT"] = true,
-   ["CLIENT_REQUIRED"] = true,
-   ["CLIENT_PROOF_REQUIRED"] = true,
-   ["CLIENT_PROOF_INVALID"] = true,
 }
 
 local function integer_text(value: integer): string
@@ -146,6 +141,19 @@ local function session_of(fields: redis_store.Fields): Session
    return session
 end
 
+local function ended_at_absolute(
+   client: redis.Client,
+   request: RequestContext,
+   key: string,
+   session: Session
+): SessionLookup
+   redis_store.delete(client, { key })
+   metrics.session_ended(request.app.name, "absolute_limit")
+   revocation.schedule(request, session, "absolute_limit")
+
+   return { state = "ended", key = key, session = session }
+end
+
 function sessions.lookup(client: redis.Client, request: RequestContext, value: string): SessionLookup
    if value == nil then
       return { state = "absent" }
@@ -173,19 +181,17 @@ function sessions.lookup(client: redis.Client, request: RequestContext, value: s
    end
 
    if lifetimes.is_past_absolute(session, clock.now_ms()) then
-      redis_store.delete(client, { key })
-      metrics.session_ended(request.app.name, "absolute_limit")
-      return { state = "ended", key = key, session = session }
+      return ended_at_absolute(client, request, key, session)
    end
 
    return { state = "found", key = key, session = session }
 end
 
-function sessions.touch(client: redis.Client, request: RequestContext, found: SessionLookup): boolean
+function sessions.touch(client: redis.Client, request: RequestContext, found: SessionLookup): SessionState
    local now = clock.now_ms()
    local ttl = lifetimes.idle_ttl_ms(request.app, found.session.absolute_end, now)
    if ttl <= 0 then
-      return false
+      return ended_at_absolute(client, request, found.key, found.session).state
    end
 
    found.session.last_seen = now
@@ -193,9 +199,10 @@ function sessions.touch(client: redis.Client, request: RequestContext, found: Se
    local written = redis_store.write_hash(client, found.key, { last_seen = integer_text(now) }, ttl, {})
    if not written then
       metrics.dependency_failed("redis")
+      return "unavailable"
    end
 
-   return written
+   return "found"
 end
 
 function sessions.begin(
@@ -225,6 +232,7 @@ function sessions.begin(
 
    local removed: {string} = {}
    local replaced = false
+   local previous: Session = nil
    if previous_session ~= nil then
       local previous_key = sessions.key_of(previous_session)
       local previous_fields = redis_store.read_hash(client, previous_key)
@@ -234,6 +242,7 @@ function sessions.begin(
       end
 
       replaced = next(previous_fields) ~= nil
+      previous = session_of(previous_fields)
       table.insert(removed, previous_key)
    end
 
@@ -255,6 +264,10 @@ function sessions.begin(
 
    if replaced then
       metrics.session_ended(request.app.name, "replaced")
+   end
+
+   if previous ~= nil and previous.app == request.app.name then
+      revocation.schedule(request, previous, "replaced")
    end
 
    metrics.session_started(request.app.name)
@@ -373,7 +386,10 @@ local function renew(client: redis.Client, request: RequestContext, found: Sessi
    local reply = identity_client.refresh(request, current.refresh_token)
    local document = identity_answers.document(reply.body)
    local code = identity_answers.error_code(document)
-   if not reply.reached or reply.status >= 500 or reply.status == 429 or CLIENT_CONFIGURATION_REFUSALS[code] then
+   if not reply.reached
+      or reply.status >= 500
+      or reply.status == 429
+      or identity_answers.is_client_refusal(code) then
       metrics.refresh(request.app.name, "unavailable")
       if not reply.reached or reply.status >= 500 then
          metrics.dependency_failed("identity")

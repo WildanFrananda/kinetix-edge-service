@@ -28,7 +28,7 @@ local function pending_keys(request: RequestContext): {string}
    return keys
 end
 
-local function signed_out(client: redis.Client, request: RequestContext, found: SessionLookup)
+local function signed_out(client: redis.Client, request: RequestContext, found: SessionLookup, revoked: boolean)
    local keys = pending_keys(request)
    if found ~= nil and found.key ~= nil then
       table.insert(keys, found.key)
@@ -42,7 +42,11 @@ local function signed_out(client: redis.Client, request: RequestContext, found: 
    end
 
    if not deleted then
-      return respond.error("SESSION_STORE_UNAVAILABLE", request.request_id, nil)
+      if not revoked then
+         return respond.error("SESSION_STORE_UNAVAILABLE", request.request_id, nil)
+      end
+
+      logger.warn("revoked_session_not_deleted", { request_id = request.request_id })
    end
 
    respond.no_content(expired_cookies())
@@ -76,7 +80,7 @@ local function settle(client: redis.Client, request: RequestContext, found: Sess
    end
 
    if session == nil then
-      return signed_out(client, request, nil)
+      return signed_out(client, request, nil, false)
    end
 
    local reply = identity_client.logout(request, session.access_token, session.refresh_token)
@@ -97,7 +101,7 @@ local function settle(client: redis.Client, request: RequestContext, found: Sess
       return respond.error("IDENTITY_FAILED", request.request_id, nil)
    end
 
-   signed_out(client, request, found)
+   signed_out(client, request, found, true)
 end
 
 function logout.serve(request: RequestContext)
@@ -114,7 +118,7 @@ function logout.serve(request: RequestContext)
       ngx.var.edge_session_tag = sessions.tag_of(value)
       settle(client, request, found)
    else
-      signed_out(client, request, nil)
+      signed_out(client, request, nil, false)
    end
 
    redis_store.release(client)

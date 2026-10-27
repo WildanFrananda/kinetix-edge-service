@@ -8,6 +8,8 @@ local record AppPolicy
    origin: string
    roles: {string}
    enrolment: boolean
+   sign_up: boolean
+   merchant_socket_roles: {string}
    persistent_cookie: boolean
    idle_seconds: integer
    absolute_seconds: integer

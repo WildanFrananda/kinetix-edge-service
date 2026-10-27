@@ -5,6 +5,7 @@ local record FakeToken
    client: string
    spent: boolean
    revoked: boolean
+   attempts: integer
 end
 
 return FakeToken

@@ -1,16 +1,14 @@
 local api_path = require("http.api_path")
-local cookies = require("http.cookies")
 local forward_headers = require("http.forward_headers")
 local http_client = require("adapters.http_client")
 local json_body = require("http.json_body")
 local logger = require("adapters.logger")
 local metrics = require("adapters.metrics")
-local redis = require("resty.redis")
 local redis_store = require("adapters.redis_store")
 local respond = require("http.respond")
+local session_use = require("http.session_use")
 local sessions = require("http.sessions")
 local settings = require("http.settings")
-local sign_in = require("http.sign_in")
 local timing = require("config.timing")
 local type RequestContext = require("types.request_context")
 local type Session = require("types.session")
@@ -25,57 +23,6 @@ local TIMEOUTS: http_client.Timeouts = {
 }
 
 local BODY_METHODS: {string: boolean} = { ["POST"] = true, ["PUT"] = true, ["PATCH"] = true, ["DELETE"] = true }
-
-local function ended(request: RequestContext, code: string)
-   respond.error(code, request.request_id, { cookies.expired(cookies.session_name) })
-end
-
-local function usable_session(client: redis.Client, request: RequestContext): Session
-   local value = sign_in.session_cookie(request)
-   local found = sessions.lookup(client, request, value)
-   if found.state == "unavailable" then
-      respond.error("SESSION_STORE_UNAVAILABLE", request.request_id, nil)
-      return nil
-   end
-
-   if found.state ~= "found" then
-      if value == nil then
-         respond.error("SESSION_REQUIRED", request.request_id, nil)
-      else
-         ended(request, "SESSION_ENDED")
-      end
-
-      return nil
-   end
-
-   ngx.var.edge_session_tag = sessions.tag_of(value)
-
-   if not sessions.touch(client, request, found) then
-      respond.error("SESSION_STORE_UNAVAILABLE", request.request_id, nil)
-      return nil
-   end
-
-   if not sessions.needs_refresh(found.session) then
-      return found.session
-   end
-
-   local result = sessions.refresh(client, request, found)
-   if result.outcome == "renewed" then
-      return result.session
-   end
-
-   if result.outcome == "refused" then
-      ended(request, "SESSION_ENDED")
-   elseif result.outcome == "role_refused" then
-      ended(request, "ROLE_REFUSED")
-   elseif result.outcome == "store_unavailable" then
-      respond.error("SESSION_STORE_UNAVAILABLE", request.request_id, nil)
-   else
-      respond.error("IDENTITY_UNAVAILABLE", request.request_id, nil)
-   end
-
-   return nil
-end
 
 local function relay(request: RequestContext, path: string, session: Session)
    local body: string = nil
@@ -145,7 +92,7 @@ function forward.serve(request: RequestContext)
       return respond.error("SESSION_STORE_UNAVAILABLE", request.request_id, nil)
    end
 
-   local session = usable_session(client, request)
+   local session = session_use.usable(client, request)
    redis_store.release(client)
 
    if session ~= nil then

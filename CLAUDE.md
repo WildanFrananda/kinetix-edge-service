@@ -54,14 +54,69 @@ app: an enrolment cannot answer `/bff/2fa/verify`, and using the wrong endpoint 
 Redis is opened before identity is asked, so an unreachable store refuses a sign-in without spending an attempt on the
 account's counter. Logout with identity unreachable answers 503 and keeps the session: "signed out" would be a definite
 answer the edge could not give. Identity's 401/403 at logout means the tokens are already dead, so the session is
-deleted. Any Redis error closes the connection instead of pooling it: a connection left inside `MULTI`, or with a late
-reply in flight, would poison the next request.
+deleted. Once identity has revoked the tokens (204, 401 or 403), a Redis failure deleting the session still answers
+204 with both cookies expired (2026-10-27): the user is signed out; the leftover hash dies with its TTL, and its
+access token works only where a service checks the signature alone, for the rest of its 15 minutes. Any Redis error
+closes the connection instead of pooling it: a connection left inside `MULTI`, or with a late reply in flight, would
+poison the next request. An error reply (`NOPERM`, `OOM`, `READONLY`) is a failure too: `lua-resty-redis` returns
+`false, err` for it, not `nil`, and until 2026-10-27 `redis_store` read it as success.
+
+## A session crossing its absolute end mid-request has ended
+
+`lookup` checks the absolute end, then `touch` computes the TTL from it a moment later. A session that crossed the end
+in between is ended exactly as `lookup` would end it (deleted, counted, its tokens revoked) and answered 401
+`SESSION_ENDED` with the cookie expired; 503 is kept for a write Redis refused (2026-10-27).
+
+## The tokens of a session the edge ends without a logout are revoked
+
+A session a new sign-in or sign-up replaces, and one `lookup` finds past its absolute end, is deleted and its refresh
+family logged out at identity (2026-10-27). That runs in an `ngx.timer` after the request, so it never delays or
+refuses the new sign-in; every outcome is counted (`kinetix_edge_session_revocations_total`: `revoked`,
+`already_revoked`, `failed`) and a failure is logged. identity's logout takes a live access token, so a session with
+under 60 s left is refreshed first and the new pair logged out; a refresh identity refuses means the family is already
+dead. Known limit: a session Redis expires by its TTL (idle, or the absolute end the TTL is bounded by) is never seen
+again, so its family lives until identity's refresh token expires. Only `lookup` racing that TTL, or a clock skew,
+reaches the absolute-end path.
+
+## Sign-up on the seller web
+
+`POST /bff/register` (seller web only, 2026-10-27) takes identity's `RegisterUserInputDto` (`email`, `password`;
+identity v1.3.1 checks 12 characters and 72 bytes) and calls identity directly as `/bff/login` does: `X-Kinetix-Client`,
+the browser's address alone. identity's 201 carries a token pair, so the session starts through the same
+`start_session` as a sign-in (role gate, fixation, cookie) and the answer is `201` with the session view. identity's
+409 is `EMAIL_TAKEN`; its 400 is `INVALID_REQUEST` with identity's validation messages relayed in `message`, so the
+form can say what to fix; 429 and outages map as at sign-in. `/api/v1/auth/register` under `/bff/api` stays refused.
+
+## The seller web's merchant socket
+
+`GET /bff/ws/v1/matching/merchant[/websocket]` (seller web only, 2026-10-27) checks, in order: a WebSocket upgrade
+(426), `Origin` equal to the app's origin, absent included (403 `CSRF_REFUSED`: a browser always sends one, and a
+cross-site page could otherwise open the socket with the cookie), a usable session, refreshed first as on `/bff/api`,
+and a role in the app's `merchant_socket_roles` (403 `SELLER_REQUIRED`, the session kept: an applicant may use the
+app, not the socket). Then `ngx.exec` hands the request to `@merchant_socket`, which proxies to `EDGE_API_UPSTREAM`
+with `Host` the upstream's own (as the API forwarder sends it; the gateway's internal twin matches `Host:
+kinetix-api-gateway`), the browser's headers off except the handshake's own, `Sec-WebSocket-Protocol: phoenix,
+base64url.bearer.phx.<token>`, and no `Origin`: Phoenix 1.8.16's `check_origin` passes a request without one, and
+matching admits only the API host. A JWT is `A-Z a-z 0-9 . - _`, whose base64 has none of `+ / - _`, so base64url and
+the standard alphabet Phoenix decodes (`Base.decode64!/2`) agree. The browser is answered `phoenix` only if it offered
+it (a browser fails a handshake naming a subprotocol it did not offer); whatever the upstream answered is dropped, so
+the token never comes back. Idle timeouts are 90 s, above Phoenix's 60 s heartbeat window. `EDGE_API_UPSTREAM` must be
+`http://`: nginx would not verify a TLS upstream here, and the API forwarder has no trust store either. Known limit:
+matching checks the token once, at the upgrade, so an open socket outlives a logout or a session's end until it
+closes.
+
+## Two-factor refusals carry a code
+
+identity's `2fa/verify` refusals are `401 { error, message }` (2026-10-27): `WRONG_CODE` is `CODE_REFUSED` and keeps
+the pending sign-in; `CHALLENGE_EXHAUSTED`, `CHALLENGE_SPENT` and `CHALLENGE_INVALID` are `SIGN_IN_REQUIRED`, the
+pending record deleted and its cookie expired. Any other 401, from an identity without the codes, keeps the old
+mapping (`CODE_REFUSED`), so the edge may deploy first.
 
 ## Forgery checks come first
 
-The order is route, method, app by host name, browser address, CSRF, JSON body, then Redis. `OPTIONS` counts as
-state-changing (no CORS is answered). A non-JSON body is 415 `JSON_REQUIRED`, counted as a CSRF refusal with reason
-`content_type`.
+The order is route, method, app by host name, browser address, the route offered on that app (else 404), CSRF, JSON
+body, then Redis. `OPTIONS` counts as state-changing (no CORS is answered). A non-JSON body is 415 `JSON_REQUIRED`,
+counted as a CSRF refusal with reason `content_type`.
 
 ## The app is the host name; the origin is the configured host
 
@@ -125,4 +180,7 @@ Integration runs the production `nginx.conf` and the generated Lua in real OpenR
 scenario's prefix only) and `redis_down`; then start-up refusals and the log scan. Redis runs with the ACL above,
 provisioned from `redis_store.commands`. The fakes (`tests/integration/fakes`) answer identity's real shapes, Nest's
 `{ statusCode, message, error, traceId }` refusals included. The harness's directories are `chmod 755`: nginx workers
-run as `nobody` when the master is root, and could not read a 0700 `mktemp` directory.
+run as `nobody` when the master is root, and could not read a 0700 `mktemp` directory. The fake API serves matching's
+merchant socket with `resty.websocket.server`, which echoes every offered subprotocol back: the harshest upstream for
+the token-leak check; the log scan also looks for the base64url form of each token a socket test saw. A Redis failure
+after identity's logout is made with `ACL SETUSER edge -del` (no `reset`, which would touch pooled connections).

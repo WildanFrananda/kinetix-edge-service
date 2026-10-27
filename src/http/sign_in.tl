@@ -20,13 +20,6 @@ local type UpstreamReply = require("types.upstream_reply")
 local record sign_in
 end
 
-local CLIENT_CONFIGURATION_REFUSALS: {string: boolean} = {
-   ["UNKNOWN_CLIENT"] = true,
-   ["CLIENT_REQUIRED"] = true,
-   ["CLIENT_PROOF_REQUIRED"] = true,
-   ["CLIENT_PROOF_INVALID"] = true,
-}
-
 local function cookie_header(request: RequestContext): string
    return context.joined(request.headers, "cookie", "; ")
 end
@@ -48,7 +41,7 @@ local function unreachable(request: RequestContext, reply: UpstreamReply, stage:
    respond.error("IDENTITY_UNAVAILABLE", request.request_id, nil)
 end
 
-local function not_understood(request: RequestContext, reply: UpstreamReply, stage: string)
+function sign_in.not_understood(request: RequestContext, reply: UpstreamReply, stage: string)
    logger.error(
       "identity_answer_not_understood",
       {
@@ -70,7 +63,7 @@ local function delayed(request: RequestContext, reply: UpstreamReply)
    respond.edge_error(failure, request.request_id, nil, identity_answers.retry_after(reply.headers))
 end
 
-local function refused_by_identity(request: RequestContext, reply: UpstreamReply, stage: string): boolean
+function sign_in.refused_by_identity(request: RequestContext, reply: UpstreamReply, stage: string): boolean
    if not reply.reached or reply.status >= 500 then
       unreachable(request, reply, stage)
       return true
@@ -82,15 +75,21 @@ local function refused_by_identity(request: RequestContext, reply: UpstreamReply
    end
 
    local code = identity_answers.error_code(identity_answers.document(reply.body))
-   if CLIENT_CONFIGURATION_REFUSALS[code] then
-      not_understood(request, reply, stage)
+   if identity_answers.is_client_refusal(code) then
+      sign_in.not_understood(request, reply, stage)
       return true
    end
 
    return false
 end
 
-local function start_session(client: redis.Client, request: RequestContext, grant: TokenGrant, stage: string)
+function sign_in.start_session(
+   client: redis.Client,
+   request: RequestContext,
+   grant: TokenGrant,
+   stage: string,
+   status: integer
+)
    local pending = sign_in.pending_cookie(request)
    local expire_pending: {string} = {}
    if pending ~= nil then
@@ -130,7 +129,7 @@ local function start_session(client: redis.Client, request: RequestContext, gran
       expiresAt = clock.iso8601(lifetimes.ends_at(request.app, session)),
    }
 
-   respond.json(200, view, set_cookies)
+   respond.json(status, view, set_cookies)
 end
 
 local function start_pending(
@@ -162,7 +161,7 @@ local function start_pending(
    respond.json(200, { mfaEnrolmentRequired = true }, set_cookies)
 end
 
-local function open(request: RequestContext): redis.Client
+function sign_in.open(request: RequestContext): redis.Client
    local client = sessions.open()
    if client == nil then
       respond.error("SESSION_STORE_UNAVAILABLE", request.request_id, nil)
@@ -172,7 +171,7 @@ local function open(request: RequestContext): redis.Client
 end
 
 local function settle_login(client: redis.Client, request: RequestContext, reply: UpstreamReply)
-   if refused_by_identity(request, reply, "login") then
+   if sign_in.refused_by_identity(request, reply, "login") then
       return
    end
 
@@ -185,12 +184,12 @@ local function settle_login(client: redis.Client, request: RequestContext, reply
    end
 
    if reply.status ~= 200 then
-      return not_understood(request, reply, "login")
+      return sign_in.not_understood(request, reply, "login")
    end
 
    local answer = identity_answers.sign_in(identity_answers.document(reply.body))
    if answer.kind == "session" then
-      return start_session(client, request, answer.grant, "login")
+      return sign_in.start_session(client, request, answer.grant, "login", 200)
    end
 
    if answer.kind == "challenge" then
@@ -206,7 +205,7 @@ local function settle_login(client: redis.Client, request: RequestContext, reply
       return start_pending(client, request, "enrolment", answer.token, answer.user_id, answer.expires_in)
    end
 
-   not_understood(request, reply, "login")
+   sign_in.not_understood(request, reply, "login")
 end
 
 function sign_in.login(request: RequestContext)
@@ -217,43 +216,13 @@ function sign_in.login(request: RequestContext)
       return respond.error("INVALID_REQUEST", request.request_id, nil)
    end
 
-   local client = open(request)
+   local client = sign_in.open(request)
    if client == nil then
       return
    end
 
    settle_login(client, request, identity_client.login(request, email, password))
    redis_store.release(client)
-end
-
-local function settle_verify(client: redis.Client, request: RequestContext, reply: UpstreamReply)
-   if refused_by_identity(request, reply, "verify") then
-      return
-   end
-
-   if reply.status == 401 then
-      return respond.error("CODE_REFUSED", request.request_id, nil)
-   end
-
-   if reply.status == 400 then
-      return respond.error("INVALID_REQUEST", request.request_id, nil)
-   end
-
-   local grant = reply.status == 200 and identity_answers.grant(identity_answers.document(reply.body)) or nil
-   if grant == nil then
-      return not_understood(request, reply, "verify")
-   end
-
-   start_session(client, request, grant, "verify")
-end
-
-local function code_of(request: RequestContext): string
-   local code = json_body.text(json_body.object(), "code", 16)
-   if code == nil then
-      respond.error("INVALID_REQUEST", request.request_id, nil)
-   end
-
-   return code
 end
 
 local function no_pending(client: redis.Client, request: RequestContext, value: string)
@@ -266,13 +235,49 @@ local function no_pending(client: redis.Client, request: RequestContext, value: 
    respond.error("SIGN_IN_REQUIRED", request.request_id, set_cookies)
 end
 
+local function settle_verify(client: redis.Client, request: RequestContext, reply: UpstreamReply, value: string)
+   if sign_in.refused_by_identity(request, reply, "verify") then
+      return
+   end
+
+   if reply.status == 401 then
+      local code = identity_answers.error_code(identity_answers.document(reply.body))
+      if identity_answers.ends_challenge(code) then
+         logger.info("challenge_ended", { reason = code, request_id = request.request_id })
+         return no_pending(client, request, value)
+      end
+
+      return respond.error("CODE_REFUSED", request.request_id, nil)
+   end
+
+   if reply.status == 400 then
+      return respond.error("INVALID_REQUEST", request.request_id, nil)
+   end
+
+   local grant = reply.status == 200 and identity_answers.grant(identity_answers.document(reply.body)) or nil
+   if grant == nil then
+      return sign_in.not_understood(request, reply, "verify")
+   end
+
+   sign_in.start_session(client, request, grant, "verify", 200)
+end
+
+local function code_of(request: RequestContext): string
+   local code = json_body.text(json_body.object(), "code", 16)
+   if code == nil then
+      respond.error("INVALID_REQUEST", request.request_id, nil)
+   end
+
+   return code
+end
+
 function sign_in.verify(request: RequestContext)
    local code = code_of(request)
    if code == nil then
       return
    end
 
-   local client = open(request)
+   local client = sign_in.open(request)
    if client == nil then
       return
    end
@@ -284,7 +289,7 @@ function sign_in.verify(request: RequestContext)
    elseif pending == nil then
       no_pending(client, request, value)
    else
-      settle_verify(client, request, identity_client.verify(request, pending.token, code))
+      settle_verify(client, request, identity_client.verify(request, pending.token, code), value)
    end
 
    redis_store.release(client)
@@ -310,7 +315,8 @@ local function settle_enrolment_refusal(
 end
 
 local function settle_setup(client: redis.Client, request: RequestContext, reply: UpstreamReply, value: string)
-   if refused_by_identity(request, reply, "setup") or settle_enrolment_refusal(client, request, reply, value) then
+   if sign_in.refused_by_identity(request, reply, "setup")
+      or settle_enrolment_refusal(client, request, reply, value) then
       return
    end
 
@@ -318,14 +324,14 @@ local function settle_setup(client: redis.Client, request: RequestContext, reply
    local secret = json_body.text(document, "twoFactorSecret", 256)
    local qr_code_url = json_body.text(document, "qrCodeUrl", 2048)
    if secret == nil or qr_code_url == nil then
-      return not_understood(request, reply, "setup")
+      return sign_in.not_understood(request, reply, "setup")
    end
 
    respond.json(200, { twoFactorSecret = secret, qrCodeUrl = qr_code_url, enabled = false }, nil)
 end
 
 function sign_in.setup(request: RequestContext)
-   local client = open(request)
+   local client = sign_in.open(request)
    if client == nil then
       return
    end
@@ -344,7 +350,8 @@ function sign_in.setup(request: RequestContext)
 end
 
 local function settle_enable(client: redis.Client, request: RequestContext, reply: UpstreamReply, value: string)
-   if refused_by_identity(request, reply, "enable") or settle_enrolment_refusal(client, request, reply, value) then
+   if sign_in.refused_by_identity(request, reply, "enable")
+      or settle_enrolment_refusal(client, request, reply, value) then
       return
    end
 
@@ -357,7 +364,7 @@ local function settle_enable(client: redis.Client, request: RequestContext, repl
    end
 
    if reply.status ~= 200 then
-      return not_understood(request, reply, "enable")
+      return sign_in.not_understood(request, reply, "enable")
    end
 
    redis_store.delete(client, { sessions.pending_key_of(value) })
@@ -370,7 +377,7 @@ function sign_in.enable(request: RequestContext)
       return
    end
 
-   local client = open(request)
+   local client = sign_in.open(request)
    if client == nil then
       return
    end

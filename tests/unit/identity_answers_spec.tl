@@ -56,4 +56,29 @@ describe("identity_answers", function()
       check.equal(identity_answers.retry_after({ ["Retry-After"] = "17" }), "17", "retry after")
       check.absent(identity_answers.retry_after({ ["Retry-After"] = "soon" }), "not a number")
    end)
+
+   it("tells a challenge that ended from a wrong code, and an identity without codes from both", function()
+      check.truthy(identity_answers.ends_challenge("CHALLENGE_EXHAUSTED"), "exhausted")
+      check.truthy(identity_answers.ends_challenge("CHALLENGE_SPENT"), "spent")
+      check.truthy(identity_answers.ends_challenge("CHALLENGE_INVALID"), "invalid")
+      check.falsy(identity_answers.ends_challenge("WRONG_CODE"), "a wrong code keeps the challenge")
+      check.falsy(identity_answers.ends_challenge("Unauthorized"), "Nest's default")
+      check.falsy(identity_answers.ends_challenge(nil), "no code")
+   end)
+
+   it("reads identity's validation messages, one or many", function()
+      check.equal(
+         identity_answers.validation_message(identity_answers.document([[{"message":["a must be b","c must be d"]}]])),
+         "a must be b; c must be d",
+         "Nest's list"
+      )
+      check.equal(
+         identity_answers.validation_message(identity_answers.document([[{"message":"a must be b"}]])),
+         "a must be b",
+         "one"
+      )
+      check.absent(identity_answers.validation_message(identity_answers.document([[{"message":[]}]])), "none")
+      local long = "{\"message\":\"" .. string.rep("x", 501) .. "\"}"
+      check.absent(identity_answers.validation_message(identity_answers.document(long)), "too long to relay")
+   end)
 end)

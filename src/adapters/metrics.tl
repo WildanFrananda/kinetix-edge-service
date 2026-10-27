@@ -11,6 +11,8 @@ local record metrics
    refresh_outcomes: {string}
    csrf_reasons: {string}
    dependencies: {string}
+   socket_outcomes: {string}
+   revocation_outcomes: {string}
 end
 
 metrics.dict_name = "edge_metrics"
@@ -29,6 +31,19 @@ metrics.csrf_reasons = { "origin", "fetch_site", "content_type" }
 
 metrics.dependencies = { "redis", "identity", "api" }
 
+metrics.socket_outcomes = {
+   "upgraded",
+   "refused",
+   "unavailable",
+   "not_websocket",
+   "origin_refused",
+   "session_refused",
+   "session_unavailable",
+   "role_refused",
+}
+
+metrics.revocation_outcomes = { "revoked", "already_revoked", "failed" }
+
 local REQUESTS = "kinetix_http_requests_total"
 local DURATION = "kinetix_http_request_duration_seconds"
 local BUILD_INFO = "kinetix_build_info"
@@ -37,6 +52,8 @@ local SESSIONS_ENDED = "kinetix_edge_sessions_ended_total"
 local REFRESHES = "kinetix_edge_refreshes_total"
 local CSRF_REFUSALS = "kinetix_edge_csrf_refusals_total"
 local DEPENDENCY_FAILURES = "kinetix_edge_dependency_failures_total"
+local SOCKET_UPGRADES = "kinetix_edge_socket_upgrades_total"
+local SESSION_REVOCATIONS = "kinetix_edge_session_revocations_total"
 
 local FAMILIES: {MetricFamily} = {
    { name = REQUESTS, help = "HTTP requests answered, by method, route and status.", kind = "counter" },
@@ -53,6 +70,16 @@ local FAMILIES: {MetricFamily} = {
    {
       name = DEPENDENCY_FAILURES,
       help = "Calls to a dependency that got no usable answer, by dependency.",
+      kind = "counter",
+   },
+   {
+      name = SOCKET_UPGRADES,
+      help = "Merchant socket upgrade requests, by application and outcome.",
+      kind = "counter",
+   },
+   {
+      name = SESSION_REVOCATIONS,
+      help = "Ended sessions whose tokens the edge asked identity to revoke, by application and outcome.",
       kind = "counter",
    },
 }
@@ -160,6 +187,14 @@ function metrics.dependency_failed(dependency: string)
    add(series(DEPENDENCY_FAILURES, { { "dependency", dependency } }), 1)
 end
 
+function metrics.socket_upgrade(app: string, outcome: string)
+   add(series(SOCKET_UPGRADES, { { "app", app }, { "outcome", outcome } }), 1)
+end
+
+function metrics.session_revocation(app: string, outcome: string)
+   add(series(SESSION_REVOCATIONS, { { "app", app }, { "outcome", outcome } }), 1)
+end
+
 local function prepublish_route(route: string)
    zero(series(REQUESTS, { { "method", "GET" }, { "route", route }, { "status", "200" } }))
 
@@ -189,6 +224,14 @@ function metrics.prepublish()
 
       for _, reason in ipairs(metrics.csrf_reasons) do
          zero(series(CSRF_REFUSALS, { { "app", app }, { "reason", reason } }))
+      end
+
+      for _, outcome in ipairs(metrics.socket_outcomes) do
+         zero(series(SOCKET_UPGRADES, { { "app", app }, { "outcome", outcome } }))
+      end
+
+      for _, outcome in ipairs(metrics.revocation_outcomes) do
+         zero(series(SESSION_REVOCATIONS, { { "app", app }, { "outcome", outcome } }))
       end
    end
 

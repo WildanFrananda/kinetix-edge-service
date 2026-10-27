@@ -30,8 +30,14 @@ errors.catalogue = {
       "This request did not come from the application's own page, so nothing was done."
    ),
    ROLE_REFUSED = entry(403, "ROLE_REFUSED", "This account cannot use this application."),
+   SELLER_REQUIRED = entry(
+      403,
+      "SELLER_REQUIRED",
+      "Only a seller account can open the merchant socket. The session is unchanged."
+   ),
    NOT_FOUND = entry(404, "NOT_FOUND", "Nothing is served at this path."),
    METHOD_NOT_ALLOWED = entry(405, "METHOD_NOT_ALLOWED", "This path does not take that method."),
+   EMAIL_TAKEN = entry(409, "EMAIL_TAKEN", "An account with this email address already exists. Sign in instead."),
    TWO_FACTOR_ALREADY_ENABLED = entry(
       409,
       "TWO_FACTOR_ALREADY_ENABLED",
@@ -41,6 +47,7 @@ errors.catalogue = {
    URI_TOO_LONG = entry(414, "URI_TOO_LONG", "The request path is longer than the edge accepts."),
    HEADERS_TOO_LARGE = entry(431, "HEADERS_TOO_LARGE", "The request headers are larger than the edge accepts."),
    JSON_REQUIRED = entry(415, "JSON_REQUIRED", "Request bodies must be application/json."),
+   WEBSOCKET_REQUIRED = entry(426, "WEBSOCKET_REQUIRED", "This path takes a WebSocket upgrade only."),
    SIGN_IN_DELAYED = entry(
       429,
       "SIGN_IN_DELAYED",

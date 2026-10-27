@@ -39,6 +39,12 @@ function identity_client.login(context: RequestContext, email: string, password:
    return post(context, "/api/v1/auth/login", body, nil)
 end
 
+function identity_client.register(context: RequestContext, email: string, password: string): UpstreamReply
+   local body = cjson.encode({ email = email, password = password })
+
+   return post(context, "/api/v1/auth/register", body, nil)
+end
+
 function identity_client.verify(context: RequestContext, challenge_token: string, code: string): UpstreamReply
    local body = cjson.encode({ challengeToken = challenge_token, code = code })
 

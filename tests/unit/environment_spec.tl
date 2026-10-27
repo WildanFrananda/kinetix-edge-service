@@ -53,6 +53,7 @@ describe("environment", function()
          { "EDGE_REDIS_PORT", "redis" },
          { "IDENTITY_HTTP_URL", "kinetix-identity-service:5000" },
          { "EDGE_API_UPSTREAM", "http://kinetix-api-gateway:8000/api" },
+         { "EDGE_API_UPSTREAM", "https://kinetix-api-gateway:8443" },
          { "KINETIX_SELLER_HOST", "https://seller.example" },
          { "KINETIX_SERVICE_VERSION", "unknown" },
          { "KINETIX_SERVICE_VERSION", "1.2.3-SNAPSHOT" },

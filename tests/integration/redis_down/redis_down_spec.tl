@@ -3,6 +3,7 @@ local client = require("tests.support.client")
 local fake = require("tests.support.fake")
 local flows = require("tests.support.flows")
 local scenario = require("tests.support.scenario")
+local socket = require("tests.support.socket")
 local type Answer = require("tests.support.types.answer")
 
 local ANY_SESSION = flows.session(string.rep("Q", 43))
@@ -33,6 +34,20 @@ describe("with Redis unreachable", function()
       unavailable(client.edge("GET", "/bff/api/v1/orders", { cookie = ANY_SESSION }), "api")
       unavailable(client.edge("POST", "/bff/logout", { cookie = ANY_SESSION }), "logout")
       unavailable(client.edge("POST", "/bff/2fa/verify", { body = client.json({ code = "123456" }) }), "verify")
+      unavailable(
+         socket.upgrade(socket.path, { cookie = ANY_SESSION }, scenario.origin("seller-web")),
+         "merchant socket"
+      )
+   end)
+
+   it("refuses a sign-up before identity is asked", function()
+      local answer = client.edge(
+         "POST",
+         "/bff/register",
+         { body = client.json({ email = "new@example.test", password = "a-long-enough-password" }) }
+      )
+      unavailable(answer, "sign-up")
+      check.equal(fake.count("register"), 0, "identity not asked")
    end)
 
    it("still refuses a forged request first", function()

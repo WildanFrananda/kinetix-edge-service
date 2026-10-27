@@ -1,4 +1,5 @@
 local redis = require("resty.redis")
+local redis_store = require("adapters.redis_store")
 
 local record redis_admin
    host: string
@@ -33,6 +34,50 @@ end
 
 function redis_admin.as_edge(): redis.Client
    return connect("edge", redis_admin.edge_password)
+end
+
+function redis_admin.edge_rule(refused: string): {string}
+   local rule: {string} = {
+      "SETUSER",
+      "edge",
+      "reset",
+      "on",
+      ">" .. redis_admin.edge_password,
+      "~edge:*",
+      "resetchannels",
+      "-@all",
+   }
+   for _, command in ipairs(redis_store.commands) do
+      if command ~= refused then
+         table.insert(rule, "+" .. string.lower(command))
+      end
+   end
+
+   return rule
+end
+
+function redis_admin.set_edge_rule(refused: string)
+   local connection = redis_admin.admin()
+   local reply, failure = connection:acl(table.unpack(redis_admin.edge_rule(refused)))
+   connection:close()
+   if reply ~= "OK" then
+      error("ACL SETUSER edge was refused: " .. tostring(failure))
+   end
+end
+
+function redis_admin.edge_command(rule: string)
+   local connection = redis_admin.admin()
+   local reply, failure = connection:acl("SETUSER", "edge", rule)
+   connection:close()
+   if reply ~= "OK" then
+      error("ACL SETUSER edge " .. rule .. " was refused: " .. tostring(failure))
+   end
+end
+
+function redis_admin.set_field(key: string, field: string, value: string)
+   local connection = redis_admin.admin()
+   connection:hset(key, field, value)
+   connection:close()
 end
 
 function redis_admin.hash(key: string): {string: string}
