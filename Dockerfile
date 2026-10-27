@@ -1,4 +1,4 @@
-FROM openresty/openresty:1.31.1.1-4-alpine-fat@sha256:035818c9596ce60cdc816fc1941db0414d50398644ec9567b45fded04a76e7d0 AS build
+FROM openresty/openresty:1.31.1.1-5-alpine-fat@sha256:32d74c9cb9190e28d07915dbe79d97439d9bbc151b5aff68b7727aa3bb55cce1 AS build
 
 COPY bin/install-toolchain /opt/toolchain/install-toolchain
 RUN sh /opt/toolchain/install-toolchain compiler http
@@ -12,7 +12,7 @@ COPY config ./config
 COPY src ./src
 RUN sh bin/build
 
-FROM openresty/openresty:1.31.1.1-4-alpine@sha256:52ff9a6e337bd0138745c73cdfeb5aaa0e783e29eeec0695eec6971c1231f3bd
+FROM openresty/openresty:1.31.1.1-5-alpine@sha256:646cdd1451ea0d465ee4a5aa42f146228f04101e318ede576f9f08a78d10423d
 
 ARG KINETIX_SERVICE_VERSION
 
