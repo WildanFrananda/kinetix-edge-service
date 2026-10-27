@@ -88,6 +88,9 @@ describe("the API forwarder", function()
 
       local refresh = client.edge("POST", "/bff/api/v1/AUTH/refresh/", { cookie = cookie, body = "{}" })
       check.equal(refresh.status, 404, "case and trailing slash")
+
+      local register = client.edge("POST", "/bff/api/v1/auth/register", { cookie = cookie, body = "{}" })
+      check.equal(register.status, 404, "register, which issues tokens too")
       check.equal(fake.count("login"), 1, "only the sign-in of the setup reached identity")
    end)
 

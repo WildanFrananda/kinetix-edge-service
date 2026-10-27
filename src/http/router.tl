@@ -6,15 +6,26 @@ local health = require("http.health")
 local json_body = require("http.json_body")
 local logger = require("adapters.logger")
 local logout = require("http.logout")
+local merchant_socket = require("http.merchant_socket")
 local metrics = require("adapters.metrics")
 local respond = require("http.respond")
 local session_endpoint = require("http.session_endpoint")
 local sign_in = require("http.sign_in")
+local sign_up = require("http.sign_up")
+local type AppPolicy = require("types.app_policy")
 local type RequestContext = require("types.request_context")
 local type Route = require("types.route")
 
 local record router
    routes: {Route}
+end
+
+local function offers_sign_up(app: AppPolicy): boolean
+   return app.sign_up
+end
+
+local function offers_merchant_socket(app: AppPolicy): boolean
+   return #app.merchant_socket_roles > 0
 end
 
 router.routes = {
@@ -51,6 +62,15 @@ router.routes = {
       handler = sign_in.login,
    },
    {
+      path = "/bff/register",
+      prefix = false,
+      name = "/bff/register",
+      methods = { "POST" },
+      for_app = true,
+      offered = offers_sign_up,
+      handler = sign_up.serve,
+   },
+   {
       path = "/bff/2fa/verify",
       prefix = false,
       name = "/bff/2fa/verify",
@@ -81,6 +101,24 @@ router.routes = {
       methods = { "POST" },
       for_app = true,
       handler = logout.serve,
+   },
+   {
+      path = "/bff/ws/v1/matching/merchant",
+      prefix = false,
+      name = "/bff/ws/v1/matching/merchant",
+      methods = { "GET" },
+      for_app = true,
+      offered = offers_merchant_socket,
+      handler = merchant_socket.serve,
+   },
+   {
+      path = "/bff/ws/v1/matching/merchant/websocket",
+      prefix = false,
+      name = "/bff/ws/v1/matching/merchant/websocket",
+      methods = { "GET" },
+      for_app = true,
+      offered = offers_merchant_socket,
+      handler = merchant_socket.serve,
    },
    {
       path = "/bff/api",
@@ -184,6 +222,10 @@ function router.serve()
 
    if route.for_app then
       ngx.var.edge_app = request.app.name
+      if route.offered ~= nil and not route.offered(request.app) then
+         return respond.error("NOT_FOUND", request_id, nil)
+      end
+
       if refused_as_forged(request) then
          return
       end

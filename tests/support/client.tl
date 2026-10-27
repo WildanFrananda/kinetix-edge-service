@@ -53,9 +53,9 @@ function client.call(base: string, method: string, path: string, headers: {strin
    }
 end
 
-function client.observe(answer: Answer)
+local function remember_secrets(values: {string})
    local path = os.getenv("EDGE_TEST_OBSERVED")
-   if path == nil then
+   if path == nil or #values == 0 then
       return
    end
 
@@ -64,14 +64,27 @@ function client.observe(answer: Answer)
       return
    end
 
-   for _, cookie in ipairs(answer.set_cookies) do
-      local value = string.match(cookie, "^__Host%-kx_%a+=([^;]+)")
-      if value ~= nil then
-         file:write(value, "\n")
-      end
+   for _, value in ipairs(values) do
+      file:write(value, "\n")
    end
 
    file:close()
+end
+
+function client.observe(answer: Answer)
+   local values: {string} = {}
+   for _, cookie in ipairs(answer.set_cookies) do
+      local value = string.match(cookie, "^__Host%-kx_%a+=([^;]+)")
+      if value ~= nil then
+         table.insert(values, value)
+      end
+   end
+
+   remember_secrets(values)
+end
+
+function client.observe_secret(value: string)
+   remember_secrets({ value })
 end
 
 function client.request_id(): string

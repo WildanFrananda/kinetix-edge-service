@@ -36,6 +36,18 @@ function flows.pending(value: string): string
    return flows.cookie("__Host-kx_pending", value)
 end
 
+function flows.eventually(holds: function(): boolean, label: string)
+   for _ = 1, 150 do
+      if holds() then
+         return
+      end
+
+      ngx.sleep(0.02)
+   end
+
+   check.truthy(holds(), label)
+end
+
 function flows.admin_session_cookie(): string
    local login = flows.login("backoffice", "admin-2fa@example.test", nil)
    local pending = client.cookie_value(login, "__Host-kx_pending")

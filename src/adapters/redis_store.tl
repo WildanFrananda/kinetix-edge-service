@@ -14,6 +14,12 @@ local function pool_of(environment: Environment): string
    return "edge:" .. environment.redis_user .. "@" .. environment.redis_host .. ":" .. tostring(environment.redis_port)
 end
 
+local function failed(client: redis.Client, failure: string): string
+   client:close()
+
+   return failure or "the store gave no answer"
+end
+
 local function sorted_keys(fields: redis_store.Fields): {string}
    local keys: {string} = {}
    for key in pairs(fields) do
@@ -66,8 +72,8 @@ end
 
 function redis_store.ping(client: redis.Client): boolean, string
    local reply, failure = client:ping()
-   if reply == nil then
-      return false, failure
+   if not reply then
+      return false, failed(client, failure)
    end
 
    return reply == "PONG", nil
@@ -75,8 +81,8 @@ end
 
 function redis_store.read_hash(client: redis.Client, key: string): redis_store.Fields, string
    local flat, failure = client:hgetall(key)
-   if flat == nil then
-      return nil, failure
+   if not flat then
+      return nil, failed(client, failure)
    end
 
    local fields: redis_store.Fields = {}
@@ -101,8 +107,8 @@ function redis_store.write_hash(
    end
 
    local opened, refused = client:multi()
-   if opened == nil then
-      return false, refused
+   if not opened then
+      return false, failed(client, refused)
    end
 
    for _, gone in ipairs(removed) do
@@ -113,12 +119,12 @@ function redis_store.write_hash(
    client:pexpire(key, ttl_ms)
 
    local results, failure = client:exec()
-   if results == nil then
-      return false, failure
+   if not results then
+      return false, failed(client, failure)
    end
 
    if #results ~= #removed + 2 then
-      return false, "the transaction did not run every command"
+      return false, failed(client, "the transaction did not run every command")
    end
 
    return true, nil
@@ -130,8 +136,8 @@ function redis_store.delete(client: redis.Client, keys: {string}): boolean, stri
    end
 
    local reply, failure = client:del(table.unpack(keys))
-   if reply == nil then
-      return false, failure
+   if not reply then
+      return false, failed(client, failure)
    end
 
    return true, nil
@@ -139,8 +145,8 @@ end
 
 function redis_store.claim(client: redis.Client, key: string, owner: string, ttl_ms: integer): boolean, string
    local reply, failure = client:set(key, owner, "NX", "PX", tostring(ttl_ms))
-   if reply == nil then
-      return false, failure
+   if not reply then
+      return false, failed(client, failure)
    end
 
    return reply == "OK", nil
@@ -148,8 +154,8 @@ end
 
 function redis_store.read(client: redis.Client, key: string): string, string
    local reply, failure = client:get(key)
-   if reply == nil then
-      return nil, failure
+   if not reply then
+      return nil, failed(client, failure)
    end
 
    if reply is string then

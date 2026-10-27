@@ -6,6 +6,21 @@ local type TokenGrant = require("types.token_grant")
 local record identity_answers
 end
 
+local CLIENT_CONFIGURATION_REFUSALS: {string: boolean} = {
+   ["UNKNOWN_CLIENT"] = true,
+   ["CLIENT_REQUIRED"] = true,
+   ["CLIENT_PROOF_REQUIRED"] = true,
+   ["CLIENT_PROOF_INVALID"] = true,
+}
+
+local ENDED_CHALLENGES: {string: boolean} = {
+   ["CHALLENGE_EXHAUSTED"] = true,
+   ["CHALLENGE_SPENT"] = true,
+   ["CHALLENGE_INVALID"] = true,
+}
+
+local VALIDATION_LONGEST = 500
+
 local function text(document: cjson.Document, name: string): string
    local value = document[name]
    if value is string and #value > 0 then
@@ -111,6 +126,39 @@ function identity_answers.error_code(document: cjson.Document): string
    end
 
    return text(document, "error")
+end
+
+function identity_answers.is_client_refusal(code: string): boolean
+   return code ~= nil and CLIENT_CONFIGURATION_REFUSALS[code] == true
+end
+
+function identity_answers.ends_challenge(code: string): boolean
+   return code ~= nil and ENDED_CHALLENGES[code] == true
+end
+
+function identity_answers.validation_message(document: cjson.Document): string
+   if document == nil then
+      return nil
+   end
+
+   local value = document["message"]
+   local parts: {string} = {}
+   if value is string then
+      table.insert(parts, value)
+   elseif value is cjson.Object then
+      for _, item in ipairs(value as {cjson.Leaf}) do
+         if item is string and #item > 0 then
+            table.insert(parts, item)
+         end
+      end
+   end
+
+   local joined = table.concat(parts, "; ")
+   if #joined == 0 or #joined > VALIDATION_LONGEST then
+      return nil
+   end
+
+   return joined
 end
 
 function identity_answers.retry_after(headers: {string: http.HeaderValue}): string

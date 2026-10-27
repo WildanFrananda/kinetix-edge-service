@@ -162,6 +162,7 @@ check_startup() {
   done
   refuses_to_start "KINETIX_SERVICE_VERSION must identify a build" KINETIX_SERVICE_VERSION=unknown
   refuses_to_start "EDGE_REDIS_PORT must be a TCP port" EDGE_REDIS_PORT=redis
+  refuses_to_start "EDGE_API_UPSTREAM must be http://host" EDGE_API_UPSTREAM=https://127.0.0.1:18002
 }
 
 check_logs() {

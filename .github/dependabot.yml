@@ -4,7 +4,7 @@ updates:
     directories:
       - "/"
       - "/toolchain"
-    target-branch: main
+    target-branch: development
     schedule:
       interval: daily
       time: "07:00"
@@ -23,7 +23,7 @@ updates:
   - package-ecosystem: github-actions
     directories:
       - "/"
-    target-branch: main
+    target-branch: development
     schedule:
       interval: weekly
       day: monday

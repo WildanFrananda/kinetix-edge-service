@@ -37,6 +37,10 @@ local record Ngx
       pid: function(): integer
    end
 
+   record timer
+      at: function(number, function(boolean)): boolean, string
+   end
+
    var: {string: string}
    header: {string: HeaderValue}
    shared: {string: SharedDict}
@@ -55,6 +59,7 @@ local record Ngx
    print: function(...: string): integer, string
    say: function(...: string): integer, string
    exit: function(integer)
+   exec: function(string)
    escape_uri: function(string): string
    encode_base64: function(string, boolean): string
 end

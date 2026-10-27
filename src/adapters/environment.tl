@@ -40,6 +40,11 @@ local function is_base_url(value: string): boolean
       or string.match(value, "^https?://[%w%.%-]+:%d+$") ~= nil
 end
 
+local function is_plain_base_url(value: string): boolean
+   return string.match(value, "^http://[%w%.%-]+$") ~= nil
+      or string.match(value, "^http://[%w%.%-]+:%d+$") ~= nil
+end
+
 local function is_host(value: string): boolean
    return string.match(value, "^[%w%.%-]+$") ~= nil
       or string.match(value, "^[%w%.%-]+:%d+$") ~= nil
@@ -97,8 +102,8 @@ function environment.read(getenv: function(string): string): Environment, {strin
    )
    check(
       problems,
-      is_base_url(values["EDGE_API_UPSTREAM"]),
-      "EDGE_API_UPSTREAM must be http(s)://host[:port] with no path"
+      is_plain_base_url(values["EDGE_API_UPSTREAM"]),
+      "EDGE_API_UPSTREAM must be http://host[:port] with no path: the gateway's internal plaintext listener"
    )
    check(problems, is_host(values["KINETIX_BACKOFFICE_HOST"]), "KINETIX_BACKOFFICE_HOST must be host or host:port")
    check(problems, is_host(values["KINETIX_SELLER_HOST"]), "KINETIX_SELLER_HOST must be host or host:port")

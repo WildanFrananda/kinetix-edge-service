@@ -1,5 +1,6 @@
 local record scenario
    edge_url: string
+   socket_url: string
    metrics_url: string
    identity_url: string
    api_url: string
@@ -12,6 +13,7 @@ local record scenario
 end
 
 scenario.edge_url = "http://127.0.0.1:8080"
+scenario.socket_url = "ws://127.0.0.1:8080"
 scenario.metrics_url = "http://127.0.0.1:9145"
 scenario.identity_url = "http://127.0.0.1:18001"
 scenario.api_url = "http://127.0.0.1:18002"
