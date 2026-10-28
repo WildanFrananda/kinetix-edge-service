@@ -21,7 +21,7 @@ scenario.identity_url = "http://127.0.0.1:18001"
 scenario.api_url = "http://127.0.0.1:18002"
 scenario.hosts = { ["backoffice"] = "backoffice.localhost:8443", ["seller-web"] = "seller.localhost:8443" }
 scenario.onion_host = "kinetixedgeintegrationabcdefghijklmnopqrstuvwxyz2345.onion"
-scenario.tunnel_host = "10.8.0.1"
+scenario.tunnel_host = "192.0.2.1"
 scenario.browser_address = "198.51.100.23"
 scenario.forwarded_for = "203.0.113.7, 198.51.100.23"
 scenario.password = "correct-password"

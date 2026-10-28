@@ -85,7 +85,7 @@ edge_environment() {
   export EDGE_REDIS_PASSWORD="$EDGE_TEST_REDIS_EDGE_PASSWORD"
   export IDENTITY_HTTP_URL=http://127.0.0.1:18001
   export EDGE_API_UPSTREAM=http://127.0.0.1:18002
-  export KINETIX_BACKOFFICE_ORIGINS=https://backoffice.localhost:8443,http://kinetixedgeintegrationabcdefghijklmnopqrstuvwxyz2345.onion,https://10.8.0.1
+  export KINETIX_BACKOFFICE_ORIGINS=https://backoffice.localhost:8443,http://kinetixedgeintegrationabcdefghijklmnopqrstuvwxyz2345.onion,https://192.0.2.1
   export KINETIX_SELLER_HOST=seller.localhost:8443
   export KINETIX_SERVICE_VERSION=itest-0123abc
 }

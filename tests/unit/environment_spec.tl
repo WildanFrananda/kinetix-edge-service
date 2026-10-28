@@ -10,7 +10,7 @@ local function complete(): {string: string}
       EDGE_REDIS_PASSWORD = "secret",
       IDENTITY_HTTP_URL = "http://kinetix-identity-service:5000",
       EDGE_API_UPSTREAM = "http://kinetix-api-gateway:8000",
-      KINETIX_BACKOFFICE_ORIGINS = "https://backoffice.wildanfrananda.my.id",
+      KINETIX_BACKOFFICE_ORIGINS = "https://backoffice.example.com",
       KINETIX_SELLER_HOST = "seller.wildanfrananda.my.id",
       KINETIX_SERVICE_VERSION = "0123456789abcdef",
    }
@@ -70,7 +70,7 @@ describe("environment", function()
    it("reads the backoffice's origins, an onion over http and the rest over https", function()
       local values = complete()
       values["KINETIX_BACKOFFICE_ORIGINS"] = " http://ABCDEFGHIJKLMNOPQRSTUVWXYZ234567abcdefghijklmnopqrstuv.onion"
-         .. " , https://10.8.0.1 "
+         .. " , https://192.0.2.1 "
       local read_environment, problems = read(values)
       check.equal(#problems, 0, "no problem")
       check.equal(#read_environment.backoffice_origins, 2, "two origins")
@@ -79,18 +79,18 @@ describe("environment", function()
          "http://abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuv.onion",
          "the onion, lowered"
       )
-      check.equal(read_environment.backoffice_origins[2], "https://10.8.0.1", "the tunnel address")
+      check.equal(read_environment.backoffice_origins[2], "https://192.0.2.1", "the tunnel address")
    end)
 
    it("refuses a backoffice origin that is not secure, not an origin, or not the backoffice's alone", function()
       local cases: {string} = {
-         "http://backoffice.wildanfrananda.my.id",
-         "backoffice.wildanfrananda.my.id",
-         "https://backoffice.wildanfrananda.my.id/",
-         "https://backoffice.wildanfrananda.my.id/path",
-         "ftp://backoffice.wildanfrananda.my.id",
+         "http://backoffice.example.com",
+         "backoffice.example.com",
+         "https://backoffice.example.com/",
+         "https://backoffice.example.com/path",
+         "ftp://backoffice.example.com",
          ",",
-         "https://10.8.0.1,https://10.8.0.1:9443",
+         "https://192.0.2.1,https://192.0.2.1:9443",
          "https://seller.wildanfrananda.my.id",
       }
       for _, origins in ipairs(cases) do
@@ -104,7 +104,7 @@ describe("environment", function()
 
    it("names a refused origin by its position, never by its value", function()
       local values = complete()
-      values["KINETIX_BACKOFFICE_ORIGINS"] = "https://10.8.0.1,http://secretaddress.example"
+      values["KINETIX_BACKOFFICE_ORIGINS"] = "https://192.0.2.1,http://secretaddress.example"
       local _, problems = read(values)
       check.equal(
          problems[1],
@@ -115,10 +115,10 @@ describe("environment", function()
 
    it("refuses one host for both applications, since the port does not tell them apart", function()
       local values = complete()
-      values["KINETIX_SELLER_HOST"] = "BACKOFFICE.wildanfrananda.my.id"
+      values["KINETIX_SELLER_HOST"] = "BACKOFFICE.example.com"
       check.absent(read(values), "same host")
 
-      values["KINETIX_SELLER_HOST"] = "backoffice.wildanfrananda.my.id:8443"
+      values["KINETIX_SELLER_HOST"] = "backoffice.example.com:8443"
       check.absent(read(values), "same host, another port")
    end)
 end)
