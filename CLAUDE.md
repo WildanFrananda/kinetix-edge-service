@@ -118,11 +118,21 @@ The order is route, method, app by host name, browser address, the route offered
 body, then Redis. `OPTIONS` counts as state-changing (no CORS is answered). A non-JSON body is 415 `JSON_REQUIRED`,
 counted as a CSRF refusal with reason `content_type`.
 
-## The app is the host name; the origin is the configured host
+## The app is the host name; the origin is configured per face
 
-The gateway preserves the browser's `Host`: `backoffice.wildanfrananda.my.id` in production, `backoffice.localhost:8443`
-in the lab. The app is matched by host name without the port; the expected `Origin` is `https://` + the configured
-host, port included. So the two hosts must differ by name, and start-up refuses two that differ only by port.
+The gateway preserves the browser's `Host`. The seller web has one host (`KINETIX_SELLER_HOST`, origin `https://` +
+host). The backoffice has a list of origins, `KINETIX_BACKOFFICE_ORIGINS` (2026-10-28, infra `docs/BACKOFFICE.md` §10):
+in production its onion service (`http://<address>.onion`) and the WireGuard fallback (`https://<tunnel address>`), in
+the lab `https://backoffice.localhost:8443`. Each origin is a face of the one backoffice app, the same name, client,
+roles, enrolment and lifetimes, so a session is a backoffice session whichever face started it; the `__Host-` cookie
+keeps each face's sessions to its own host anyway. A request is matched to a face by host name without the port, and
+its `Origin` must equal that face's origin exactly: an onion request carrying the tunnel's origin is a forgery.
+
+`http://` is accepted only for a `.onion` host. Tor Browser treats an onion over http as a secure context, so the
+`Secure` cookie still holds; anywhere else http would send the cookie in clear text, so start-up refuses it. Start-up
+also refuses a host named twice (by name: the port does not tell faces apart) and one the seller web uses. A refused
+entry is named by its position, never by its value, and the `configured` log line counts the faces instead of naming
+them: the onion address stays out of the logs.
 
 ## The browser's address is the last X-Forwarded-For entry
 
@@ -138,7 +148,7 @@ under `forwarding.identity_paths` (`/api/v1/auth`, `/api/v1/couriers`: the contr
 straight to `IDENTITY_HTTP_URL` with the browser's address as the only `X-Forwarded-For` entry, the session's bearer,
 the request id and the app's `X-Kinetix-Client`. The token-issuing routes stay refused before this choice. On this path
 Kong's `jwt` plugin does not run: identity verifies every token itself (`JwtAuthGuard` is global, revocation included),
-and the backoffice host is behind the staff gate at the gateway before the edge is reached. `/api/v1/users` and
+and the backoffice is reached only through its onion (client authorization at Tor) or the gateway's staff gate. `/api/v1/users` and
 `/api/v1/sellers` are not throttled by identity and stay on the gateway; a throttle added there moves them onto the list.
 Everything else goes to the gateway's internal listener, where the twin appends the edge's address, so a per-address
 limit in another service sees the edge.

@@ -11,7 +11,7 @@ environment.names = {
    "EDGE_REDIS_PASSWORD",
    "IDENTITY_HTTP_URL",
    "EDGE_API_UPSTREAM",
-   "KINETIX_BACKOFFICE_HOST",
+   "KINETIX_BACKOFFICE_ORIGINS",
    "KINETIX_SELLER_HOST",
    "KINETIX_SERVICE_VERSION",
 }
@@ -69,6 +69,49 @@ local function hostname_of(host: string): string
    return (string.gsub(string.lower(host), ":%d+$", ""))
 end
 
+local function origin_parts(value: string): string, string
+   local scheme, host = string.match(value, "^(https?)://([%w%.%-]+)$")
+   if scheme == nil then
+      scheme, host = string.match(value, "^(https?)://([%w%.%-]+:%d+)$")
+   end
+
+   return scheme, host
+end
+
+local function backoffice_origins(value: string, seller_hostname: string, problems: {string}): {string}
+   local origins: {string} = {}
+   local seen: {string: boolean} = {}
+   local position = 0
+
+   for entry in string.gmatch(value, "[^,]+") do
+      position = position + 1
+      local origin = string.lower(trimmed(entry))
+      local scheme, host = origin_parts(origin)
+      local label = "KINETIX_BACKOFFICE_ORIGINS entry " .. tostring(position)
+      if scheme == nil then
+         table.insert(problems, label .. " must be http(s)://host[:port] with no path")
+      else
+         local hostname = hostname_of(host)
+         if scheme == "http" and string.match(hostname, "%.onion$") == nil then
+            table.insert(problems, label .. " may use http only for a .onion host, which browsers treat as secure")
+         elseif seen[hostname] then
+            table.insert(problems, label .. " repeats a host name an earlier entry names")
+         elseif hostname == seller_hostname then
+            table.insert(problems, label .. " names KINETIX_SELLER_HOST's host; each app needs its own")
+         else
+            seen[hostname] = true
+            table.insert(origins, origin)
+         end
+      end
+   end
+
+   if position == 0 then
+      table.insert(problems, "KINETIX_BACKOFFICE_ORIGINS must name at least one origin")
+   end
+
+   return origins
+end
+
 local function check(problems: {string}, holds: boolean, problem: string)
    if not holds then
       table.insert(problems, problem)
@@ -105,12 +148,11 @@ function environment.read(getenv: function(string): string): Environment, {strin
       is_plain_base_url(values["EDGE_API_UPSTREAM"]),
       "EDGE_API_UPSTREAM must be http://host[:port] with no path: the gateway's internal plaintext listener"
    )
-   check(problems, is_host(values["KINETIX_BACKOFFICE_HOST"]), "KINETIX_BACKOFFICE_HOST must be host or host:port")
    check(problems, is_host(values["KINETIX_SELLER_HOST"]), "KINETIX_SELLER_HOST must be host or host:port")
-   check(
-      problems,
-      hostname_of(values["KINETIX_BACKOFFICE_HOST"]) ~= hostname_of(values["KINETIX_SELLER_HOST"]),
-      "KINETIX_BACKOFFICE_HOST and KINETIX_SELLER_HOST must name different hosts"
+   local origins = backoffice_origins(
+      values["KINETIX_BACKOFFICE_ORIGINS"],
+      hostname_of(values["KINETIX_SELLER_HOST"]),
+      problems
    )
    check(
       problems,
@@ -129,7 +171,7 @@ function environment.read(getenv: function(string): string): Environment, {strin
       redis_password = values["EDGE_REDIS_PASSWORD"],
       identity_url = values["IDENTITY_HTTP_URL"],
       api_upstream = values["EDGE_API_UPSTREAM"],
-      backoffice_host = values["KINETIX_BACKOFFICE_HOST"],
+      backoffice_origins = origins,
       seller_host = values["KINETIX_SELLER_HOST"],
       service_version = values["KINETIX_SERVICE_VERSION"],
    }, problems

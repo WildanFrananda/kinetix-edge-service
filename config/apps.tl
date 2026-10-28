@@ -5,19 +5,25 @@ local lifetimes = require("config.lifetimes")
 local record apps
 end
 
-function apps.policies(environment: Environment): {AppPolicy}
-   local backoffice_host = string.lower(environment.backoffice_host)
-   local seller_host = string.lower(environment.seller_host)
-   local backoffice_hostname = string.gsub(backoffice_host, ":%d+$", "")
-   local seller_hostname = string.gsub(seller_host, ":%d+$", "")
+local function host_of(origin: string): string
+   return (string.gsub(origin, "^https?://", ""))
+end
 
-   return {
-      {
+local function hostname_of(host: string): string
+   return (string.gsub(host, ":%d+$", ""))
+end
+
+function apps.policies(environment: Environment): {AppPolicy}
+   local policies: {AppPolicy} = {}
+
+   for _, origin in ipairs(environment.backoffice_origins) do
+      local host = host_of(string.lower(origin))
+      table.insert(policies, {
          name = "backoffice",
          client = "backoffice",
-         host = backoffice_host,
-         hostname = backoffice_hostname,
-         origin = "https://" .. backoffice_host,
+         host = host,
+         hostname = hostname_of(host),
+         origin = string.lower(origin),
          roles = { "admin" },
          enrolment = true,
          sign_up = false,
@@ -25,22 +31,26 @@ function apps.policies(environment: Environment): {AppPolicy}
          persistent_cookie = false,
          idle_seconds = lifetimes["backoffice"].idle_seconds,
          absolute_seconds = lifetimes["backoffice"].absolute_seconds,
-      },
-      {
-         name = "seller-web",
-         client = "seller-web",
-         host = seller_host,
-         hostname = seller_hostname,
-         origin = "https://" .. seller_host,
-         roles = { "seller", "customer" },
-         enrolment = false,
-         sign_up = true,
-         merchant_socket_roles = { "seller" },
-         persistent_cookie = true,
-         idle_seconds = lifetimes["seller-web"].idle_seconds,
-         absolute_seconds = lifetimes["seller-web"].absolute_seconds,
-      },
-   }
+      })
+   end
+
+   local seller_host = string.lower(environment.seller_host)
+   table.insert(policies, {
+      name = "seller-web",
+      client = "seller-web",
+      host = seller_host,
+      hostname = hostname_of(seller_host),
+      origin = "https://" .. seller_host,
+      roles = { "seller", "customer" },
+      enrolment = false,
+      sign_up = true,
+      merchant_socket_roles = { "seller" },
+      persistent_cookie = true,
+      idle_seconds = lifetimes["seller-web"].idle_seconds,
+      absolute_seconds = lifetimes["seller-web"].absolute_seconds,
+   })
+
+   return policies
 end
 
 return apps

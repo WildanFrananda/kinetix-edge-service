@@ -85,7 +85,7 @@ edge_environment() {
   export EDGE_REDIS_PASSWORD="$EDGE_TEST_REDIS_EDGE_PASSWORD"
   export IDENTITY_HTTP_URL=http://127.0.0.1:18001
   export EDGE_API_UPSTREAM=http://127.0.0.1:18002
-  export KINETIX_BACKOFFICE_HOST=backoffice.localhost:8443
+  export KINETIX_BACKOFFICE_ORIGINS=https://backoffice.localhost:8443,http://kinetixedgeintegrationabcdefghijklmnopqrstuvwxyz2345.onion,https://10.8.0.1
   export KINETIX_SELLER_HOST=seller.localhost:8443
   export KINETIX_SERVICE_VERSION=itest-0123abc
 }
@@ -157,7 +157,7 @@ check_startup() {
   cp nginx/nginx.conf "$work/startup/conf/nginx.conf"
   cp -R build/lua "$work/startup/lua"
   for variable in EDGE_REDIS_HOST EDGE_REDIS_PORT EDGE_REDIS_USER EDGE_REDIS_PASSWORD IDENTITY_HTTP_URL \
-    EDGE_API_UPSTREAM KINETIX_BACKOFFICE_HOST KINETIX_SELLER_HOST KINETIX_SERVICE_VERSION; do
+    EDGE_API_UPSTREAM KINETIX_BACKOFFICE_ORIGINS KINETIX_SELLER_HOST KINETIX_SERVICE_VERSION; do
     refuses_to_start "$variable is required" -u "$variable"
   done
   refuses_to_start "KINETIX_SERVICE_VERSION must identify a build" KINETIX_SERVICE_VERSION=unknown
