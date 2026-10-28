@@ -62,7 +62,7 @@ The policy is code: `config/apps.tl`, `config/lifetimes.tl`, `config/timing.tl`,
 
 Every variable is required; `.env.example` documents each. `EDGE_REDIS_HOST`, `EDGE_REDIS_PORT`, `EDGE_REDIS_USER`,
 `EDGE_REDIS_PASSWORD`, `IDENTITY_HTTP_URL`, `EDGE_API_UPSTREAM` (`http://` only: the gateway's internal plaintext
-listener), `KINETIX_BACKOFFICE_HOST`, `KINETIX_SELLER_HOST`, and `KINETIX_SERVICE_VERSION` (baked from the build
+listener), `KINETIX_BACKOFFICE_ORIGINS` (a comma-separated list of the backoffice's origins), `KINETIX_SELLER_HOST`, and `KINETIX_SERVICE_VERSION` (baked from the build
 argument of that name).
 
 The Redis ACL user the edge needs, exactly (the integration suite runs under it):

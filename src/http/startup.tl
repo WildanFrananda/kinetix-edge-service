@@ -21,8 +21,8 @@ function startup.run()
       "configured",
       {
          version = read.service_version,
-         backoffice_host = settings.current.apps[1].host,
-         seller_host = settings.current.apps[2].host,
+         backoffice_faces = #read.backoffice_origins,
+         seller_host = string.lower(read.seller_host),
       }
    )
 end

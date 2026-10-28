@@ -5,7 +5,7 @@ local record Environment
    redis_password: string
    identity_url: string
    api_upstream: string
-   backoffice_host: string
+   backoffice_origins: {string}
    seller_host: string
    service_version: string
 end

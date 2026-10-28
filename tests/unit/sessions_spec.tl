@@ -13,7 +13,7 @@ local POLICIES = apps.policies({
    redis_password = "p",
    identity_url = "http://i:5000",
    api_upstream = "http://g:8000",
-   backoffice_host = "backoffice.example.test",
+   backoffice_origins = { "https://backoffice.example.test" },
    seller_host = "seller.example.test",
    service_version = "v",
 })
