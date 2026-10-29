@@ -14,9 +14,11 @@ On port `8080`, plain HTTP on the Docker network. The gateway sends only `/bff/.
 | Method | Path | What it does |
 | --- | --- | --- |
 | `GET` | `/bff/session` | `{ authenticated, role, principalId, expiresAt }`, never a token; reading it does not extend the session |
-| `POST` | `/bff/login` | `{ email, password }` → a session, or `{ mfaRequired: true }`, or (backoffice) `{ mfaEnrolmentRequired: true }` |
+| `POST` | `/bff/login` | `{ email, password }` → a session, or `{ mfaRequired: true }` (backoffice: `{ mfaRequired: true, passkeys }`, identity's flag, `false` when it gives none), or (backoffice) `{ mfaEnrolmentRequired: true }` |
 | `POST` | `/bff/register` | seller web only: `{ email, password }` → identity creates the account (a `customer`) and the edge starts its session as a sign-in does: `201` with the session view, never a token |
 | `POST` | `/bff/2fa/verify` | `{ code }` → a session, from the pending challenge; a wrong code keeps the challenge (`CODE_REFUSED`), one identity calls spent, exhausted or unknown ends it (`SIGN_IN_REQUIRED`) |
+| `POST` | `/bff/2fa/passkey/options` | backoffice only: `{ options }`, identity's WebAuthn request options for the pending challenge, unchanged; the challenge stays pending |
+| `POST` | `/bff/2fa/passkey/verify` | backoffice only: `{ credential }` (the WebAuthn assertion, a JSON object) → a session, as `/bff/2fa/verify`; a refused passkey keeps the challenge (`PASSKEY_REFUSED`), one identity calls spent, exhausted or unknown ends it (`SIGN_IN_REQUIRED`) |
 | `POST` | `/bff/2fa/setup` | the secret and QR URL to show, from the pending enrolment |
 | `POST` | `/bff/2fa/enable` | `{ code }` → `{ enabled: true }`; the user then signs in again |
 | `POST` | `/bff/logout` | logs out at identity with the refresh token, deletes the session, expires both cookies (`204`, also when identity revoked the tokens and Redis then failed) |
@@ -32,7 +34,7 @@ Every answer carries `Cache-Control: no-store`. Every error is `{ error, message
 | Status | `error` |
 | --- | --- |
 | 400 | `INVALID_REQUEST`, `CLIENT_ADDRESS_REQUIRED` |
-| 401 | `SIGN_IN_REFUSED`, `CODE_REFUSED`, `SIGN_IN_REQUIRED`, `SESSION_REQUIRED`, `SESSION_ENDED` |
+| 401 | `SIGN_IN_REFUSED`, `CODE_REFUSED`, `PASSKEY_REFUSED`, `SIGN_IN_REQUIRED`, `SESSION_REQUIRED`, `SESSION_ENDED` |
 | 403 | `CSRF_REFUSED`, `ROLE_REFUSED`, `SELLER_REQUIRED` (the merchant socket; the session is kept) |
 | 404, 405 | `NOT_FOUND`, `METHOD_NOT_ALLOWED` (with `Allow`) |
 | 409 | `TWO_FACTOR_ALREADY_ENABLED`, `EMAIL_TAKEN` |
@@ -54,7 +56,9 @@ reached it keeps matching's status and empty body.
 | seller web | `seller-web` | `seller`, `customer` | 7 days / 30 days | `Max-Age` = 30 days |
 
 Only the seller web offers sign-up and the merchant socket (to `seller` sessions); on the backoffice host both are
-`404 NOT_FOUND`.
+`404 NOT_FOUND`. Only the backoffice offers passkey sign-in; on the seller web both passkey routes are `404 NOT_FOUND`
+and its challenge answer stays `{ mfaRequired: true }`. Passkey management (`/bff/api/v1/auth/passkeys/...`) is an
+ordinary API call to identity, `DELETE` with its body included.
 
 The policy is code: `config/apps.tl`, `config/lifetimes.tl`, `config/timing.tl`, `config/forwarding.tl`.
 

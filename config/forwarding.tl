@@ -43,6 +43,7 @@ forwarding.refused_paths = {
    "/api/v1/auth/refresh",
    "/api/v1/auth/logout",
    "/api/v1/auth/2fa/verify",
+   "/api/v1/auth/2fa/passkey/verify",
    "/api/v1/couriers/register",
 }
 

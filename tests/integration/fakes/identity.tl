@@ -1,4 +1,5 @@
 local cjson = require("cjson.safe")
+local passkey_fixture = require("tests.integration.fakes.passkey_fixture")
 local type FakeSettings = require("tests.integration.fakes.types.fake_settings")
 local type FakeToken = require("tests.integration.fakes.types.fake_token")
 local type FakeUser = require("tests.integration.fakes.types.fake_user")
@@ -15,6 +16,8 @@ local tokens: {string: FakeToken} = {}
 local counters: {string: integer} = {}
 local last_headers: {string: {string: string}} = {}
 local last_paths: {string: string} = {}
+local last_methods: {string: string} = {}
+local last_bodies: {string: string} = {}
 local issued: {string: string} = {}
 local buckets: {string: integer} = {}
 local sequence = 0
@@ -26,6 +29,8 @@ local function seed()
    counters = {}
    last_headers = {}
    last_paths = {}
+   last_methods = {}
+   last_bodies = {}
    issued = {}
    buckets = {}
    settings = {
@@ -35,17 +40,21 @@ local function seed()
       logout_mode = "ok",
       register_mode = "ok",
       verify_codes = "on",
+      passkeys_flag = "on",
+      passkey_mode = "ok",
       access_expires_in = 900,
       roles = {},
    }
 
    local rows: {{string}} = {
-      { "seller@example.test", "seller", "false" },
-      { "seller-2fa@example.test", "seller", "true" },
-      { "customer@example.test", "customer", "false" },
-      { "courier@example.test", "courier", "false" },
-      { "admin-2fa@example.test", "admin", "true" },
-      { "admin-new@example.test", "admin", "false" },
+      { "seller@example.test", "seller", "false", "false" },
+      { "seller-2fa@example.test", "seller", "true", "false" },
+      { "customer@example.test", "customer", "false", "false" },
+      { "courier@example.test", "courier", "false", "false" },
+      { "admin-2fa@example.test", "admin", "true", "false" },
+      { "admin-new@example.test", "admin", "false", "false" },
+      { "admin-passkey@example.test", "admin", "true", "true" },
+      { "seller-passkey@example.test", "seller", "true", "true" },
    }
    for index, row in ipairs(rows) do
       users[row[1]] = {
@@ -55,6 +64,7 @@ local function seed()
          role = row[2],
          principal_id = "prn_fake_" .. string.format("%d", 100 + index),
          two_factor = row[3] == "true",
+         passkeys = row[4] == "true",
          secret_issued = false,
       }
    end
@@ -94,14 +104,24 @@ local function remember(name: string)
       end
    end
 
+   ngx.req.read_body()
+
    last_headers[name] = flat
    last_paths[name] = ngx.var.uri
+   last_methods[name] = ngx.req.get_method()
+   last_bodies[name] = ngx.req.get_body_data() or ""
 end
 
 local function answer<T>(status: integer, value: T)
    ngx.status = status
    ngx.header["Content-Type"] = "application/json"
    local text = cjson.encode(value)
+   ngx.print(text)
+end
+
+local function raw(status: integer, text: string)
+   ngx.status = status
+   ngx.header["Content-Type"] = "application/json"
    ngx.print(text)
 end
 
@@ -205,9 +225,14 @@ local function login()
    end
 
    if user.two_factor then
+      local challenge = next_token("challenge", user.email, "", "")
+      if settings.passkeys_flag == "off" then
+         return answer(200, { mfaRequired = true, challengeToken = challenge, expiresIn = 300 })
+      end
+
       return answer(
          200,
-         { mfaRequired = true, challengeToken = next_token("challenge", user.email, "", ""), expiresIn = 300 }
+         { mfaRequired = true, challengeToken = challenge, expiresIn = 300, passkeys = user.passkeys }
       )
    end
 
@@ -236,6 +261,26 @@ local function challenge_refused(code: string, message: string)
    answer(401, { error = code, message = message, traceId = ngx.var.http_x_request_id or "-" })
 end
 
+local function open_challenge(document: cjson.Document): FakeToken
+   local token = tokens[text(document, "challengeToken") or ""]
+   if token == nil or token.kind ~= "challenge" then
+      challenge_refused("CHALLENGE_INVALID", "This is not a two-factor challenge")
+      return nil
+   end
+
+   if token.spent then
+      challenge_refused("CHALLENGE_SPENT", "This two-factor challenge was already used")
+      return nil
+   end
+
+   if token.attempts >= CHALLENGE_ATTEMPTS then
+      challenge_refused("CHALLENGE_EXHAUSTED", "Too many wrong codes for this challenge. Sign in again")
+      return nil
+   end
+
+   return token
+end
+
 local function verify()
    count("verify")
    remember("verify")
@@ -245,17 +290,9 @@ local function verify()
    end
 
    local document = body()
-   local token = tokens[text(document, "challengeToken") or ""]
-   if token == nil or token.kind ~= "challenge" then
-      return challenge_refused("CHALLENGE_INVALID", "This is not a two-factor challenge")
-   end
-
-   if token.spent then
-      return challenge_refused("CHALLENGE_SPENT", "This two-factor challenge was already used")
-   end
-
-   if token.attempts >= CHALLENGE_ATTEMPTS then
-      return challenge_refused("CHALLENGE_EXHAUSTED", "Too many wrong codes for this challenge. Sign in again")
+   local token = open_challenge(document)
+   if token == nil then
+      return
    end
 
    if text(document, "code") ~= CODE then
@@ -266,6 +303,83 @@ local function verify()
    token.spent = true
    sequence = sequence + 1
    pair(users[token.email], "family-" .. string.format("%d", sequence), ngx.var.http_x_kinetix_client, 200)
+end
+
+local function passkey_unavailable(): boolean
+   if settings.passkey_mode == "close" then
+      ngx.exit(444)
+      return true
+   end
+
+   if settings.passkey_mode == "unavailable" then
+      refuse(503, "DATABASE_UNAVAILABLE", "identity could not reach its database.")
+      return true
+   end
+
+   return client_refused()
+end
+
+local function passkey_options()
+   count("passkey_options")
+   remember("passkey_options")
+
+   if passkey_unavailable() then
+      return
+   end
+
+   local token = open_challenge(body())
+   if token == nil then
+      return
+   end
+
+   if settings.passkey_mode == "malformed" then
+      return raw(200, "{\"options\":[]}")
+   end
+
+   if not users[token.email].passkeys then
+      return answer(
+         409,
+         {
+            error = "NO_PASSKEYS",
+            message = "This account has no passkey; answer the challenge with the code.",
+            traceId = ngx.var.http_x_request_id or "-",
+         }
+      )
+   end
+
+   sequence = sequence + 1
+   token.passkey_challenge = "fake-passkey-challenge-" .. string.format("%d", sequence)
+   issued["passkey_challenge"] = token.passkey_challenge
+   raw(200, passkey_fixture.options(token.passkey_challenge))
+end
+
+local function passkey_verify()
+   count("passkey_verify")
+   remember("passkey_verify")
+
+   if passkey_unavailable() then
+      return
+   end
+
+   local document = body()
+   local token = open_challenge(document)
+   if token == nil then
+      return
+   end
+
+   local user = users[token.email]
+   local credential = document["credential"]
+   if token.passkey_challenge == nil
+      or not user.passkeys
+      or not credential is cjson.Object
+      or credential["id"] ~= passkey_fixture.credential_id then
+      token.attempts = token.attempts + 1
+      return challenge_refused("PASSKEY_REFUSED", "The passkey was not accepted")
+   end
+
+   token.spent = true
+   sequence = sequence + 1
+   pair(user, "family-" .. string.format("%d", sequence), ngx.var.http_x_kinetix_client, 200)
 end
 
 local function registration_refusal(email: string, password: string): {string}
@@ -510,6 +624,32 @@ local function me()
    )
 end
 
+local function passkeys()
+   count("passkeys")
+   remember("passkeys")
+
+   local access = tokens[bearer() or ""]
+   if access == nil or access.kind ~= "access" or access.revoked then
+      return refuse(401, "Unauthorized", "A Bearer token is required")
+   end
+
+   local method = ngx.req.get_method()
+   if method == "DELETE" then
+      ngx.status = 204
+      return
+   end
+
+   if method == "GET" then
+      return raw(200, "{\"passkeys\":[" .. passkey_fixture.created .. "]}")
+   end
+
+   if string.match(ngx.var.uri, "/options$") ~= nil then
+      return raw(200, passkey_fixture.creation_options)
+   end
+
+   raw(201, passkey_fixture.created)
+end
+
 local function couriers()
    count("couriers")
    remember("couriers")
@@ -534,7 +674,18 @@ local function state()
       end
    end
 
-   answer(200, { counters = counters, headers = last_headers, paths = last_paths, issued = issued, revoked = revoked })
+   answer(
+      200,
+      {
+         counters = counters,
+         headers = last_headers,
+         paths = last_paths,
+         methods = last_methods,
+         bodies = last_bodies,
+         issued = issued,
+         revoked = revoked,
+      }
+   )
 end
 
 local function configure()
@@ -564,6 +715,16 @@ local function configure()
       settings.verify_codes = verify_codes
    end
 
+   local passkeys_flag = text(document, "passkeys_flag")
+   if passkeys_flag ~= nil then
+      settings.passkeys_flag = passkeys_flag
+   end
+
+   local passkey_mode = text(document, "passkey_mode")
+   if passkey_mode ~= nil then
+      settings.passkey_mode = passkey_mode
+   end
+
    local delay = document["refresh_delay_ms"]
    if delay is number then
       settings.refresh_delay_ms = math.floor(delay)
@@ -590,6 +751,8 @@ local ROUTES: {string: function()} = {
    ["/api/v1/auth/login"] = login,
    ["/api/v1/auth/register"] = register,
    ["/api/v1/auth/2fa/verify"] = verify,
+   ["/api/v1/auth/2fa/passkey/options"] = passkey_options,
+   ["/api/v1/auth/2fa/passkey/verify"] = passkey_verify,
    ["/api/v1/auth/refresh"] = refresh,
    ["/api/v1/auth/logout"] = logout,
    ["/api/v1/auth/me"] = me,
@@ -610,6 +773,10 @@ function identity.serve()
 
    if string.match(uri, "^/api/v1/auth/2fa/enable/%d+$") ~= nil then
       return enable()
+   end
+
+   if string.match(uri, "^/api/v1/auth/passkeys/") ~= nil then
+      return passkeys()
    end
 
    if string.match(uri, "^/api/v1/couriers/") ~= nil then

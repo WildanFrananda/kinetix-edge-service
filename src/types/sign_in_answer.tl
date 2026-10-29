@@ -7,6 +7,7 @@ local record SignInAnswer
    token: string
    user_id: integer
    expires_in: integer
+   passkeys: boolean
 end
 
 return SignInAnswer

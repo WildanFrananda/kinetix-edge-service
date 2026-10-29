@@ -33,10 +33,11 @@ describe("sign-in with a second factor", function()
       redis_admin.flush()
    end)
 
-   it("keeps the challenge in Redis behind a pending cookie and answers only mfaRequired", function()
+   it("keeps the challenge in Redis behind a pending cookie and answers only mfaRequired and passkeys", function()
       local answer = flows.login("backoffice", "admin-2fa@example.test", nil)
       check.equal(answer.status, 200, "status")
       check.equal(client.flag(answer, "mfaRequired"), true, "mfa required")
+      check.equal(client.flag(answer, "passkeys"), false, "no passkey enrolled")
       check.excludes(answer.body, "fake-challenge", "no challenge token in the body")
       check.absent(client.set_cookie(answer, "__Host-kx_session"), "no session yet")
 

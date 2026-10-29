@@ -57,6 +57,24 @@ function fake.path(endpoint: string): string
    return nil
 end
 
+function fake.method(endpoint: string): string
+   local value = section("methods")[endpoint]
+   if value is string then
+      return value
+   end
+
+   return nil
+end
+
+function fake.body(endpoint: string): string
+   local value = section("bodies")[endpoint]
+   if value is string then
+      return value
+   end
+
+   return nil
+end
+
 function fake.headers(endpoint: string): {string: string}
    local raw = client.call(scenario.identity_url, "GET", "/__fake/state", {}, nil).body
    local decoded = cjson.decode(raw)

@@ -166,7 +166,7 @@ check_startup() {
 }
 
 check_logs() {
-  forbidden="__Host-kx fake-access fake-refresh fake-challenge fake-enrolment @example.test correct-password 123456 JBSWY3DPEHPK3PXP $EDGE_TEST_REDIS_EDGE_PASSWORD"
+  forbidden="__Host-kx fake-access fake-refresh fake-challenge fake-enrolment fake-passkey @example.test correct-password 123456 JBSWY3DPEHPK3PXP $EDGE_TEST_REDIS_EDGE_PASSWORD"
   for needle in $forbidden; do
     if grep -qF -- "$needle" "$logs/edge.log"; then
       echo "the edge logged something it must never log ($needle)" >&2

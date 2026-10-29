@@ -98,7 +98,7 @@ function identity_answers.sign_in(document: cjson.Document): SignInAnswer
          return { kind = "malformed" }
       end
 
-      return { kind = "challenge", token = challenge, expires_in = expires_in }
+      return { kind = "challenge", token = challenge, expires_in = expires_in, passkeys = flag(document, "passkeys") }
    end
 
    if flag(document, "mfaEnrolmentRequired") then

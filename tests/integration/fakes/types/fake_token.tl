@@ -6,6 +6,7 @@ local record FakeToken
    spent: boolean
    revoked: boolean
    attempts: integer
+   passkey_challenge: string
 end
 
 return FakeToken

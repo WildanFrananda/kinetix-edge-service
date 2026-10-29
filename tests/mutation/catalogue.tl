@@ -476,6 +476,42 @@ catalogue.mutations = {
       unit = { "apps" },
       integration = { "backoffice_faces" },
    },
+   {
+      id = "forward-passkey-verify-route",
+      check = "identity's passkey sign-in, which issues tokens, is never forwarded",
+      file = "config/forwarding.tl",
+      old = "   \"/api/v1/auth/2fa/passkey/verify\",\n",
+      new = "",
+      unit = { "api_path" },
+      integration = { "forwarding" },
+   },
+   {
+      id = "passkeys-policy",
+      check = "the seller web offers no passkey sign-in and its challenge answer is unchanged",
+      file = "config/apps.tl",
+      old = "      passkeys = false,",
+      new = "      passkeys = true,",
+      unit = { "apps" },
+      integration = { "passkey" },
+   },
+   {
+      id = "passkeys-answer-per-app",
+      check = "only an application offering passkeys hears identity's passkeys flag",
+      file = "src/http/sign_in.tl",
+      old = "   if app.passkeys then",
+      new = "   if app ~= nil then",
+      unit = {},
+      integration = { "passkey" },
+   },
+   {
+      id = "passkey-credential-object",
+      check = "a passkey credential that is not a JSON object is refused before identity is asked",
+      file = "src/adapters/json_relay.tl",
+      old = "   if value is cjson.Object and getmetatable(value) == nil then",
+      new = "   if value is cjson.Object then",
+      unit = { "json_relay" },
+      integration = { "passkey" },
+   },
 }
 
 return catalogue

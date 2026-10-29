@@ -1,5 +1,6 @@
 local cjson = require("cjson.safe")
 local http_client = require("adapters.http_client")
+local json_relay = require("adapters.json_relay")
 local settings = require("http.settings")
 local timing = require("config.timing")
 local type RequestContext = require("types.request_context")
@@ -49,6 +50,22 @@ function identity_client.verify(context: RequestContext, challenge_token: string
    local body = cjson.encode({ challengeToken = challenge_token, code = code })
 
    return post(context, "/api/v1/auth/2fa/verify", body, nil)
+end
+
+function identity_client.passkey_options(context: RequestContext, challenge_token: string): UpstreamReply
+   local body = cjson.encode({ challengeToken = challenge_token })
+
+   return post(context, "/api/v1/auth/2fa/passkey/options", body, nil)
+end
+
+function identity_client.passkey_verify(
+   context: RequestContext,
+   challenge_token: string,
+   credential: cjson.Object
+): UpstreamReply
+   local body = json_relay.encode({ challengeToken = challenge_token, credential = credential })
+
+   return post(context, "/api/v1/auth/2fa/passkey/verify", body, nil)
 end
 
 function identity_client.setup(context: RequestContext, enrolment_token: string, user_id: integer): UpstreamReply

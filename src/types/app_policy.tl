@@ -9,6 +9,7 @@ local record AppPolicy
    roles: {string}
    enrolment: boolean
    sign_up: boolean
+   passkeys: boolean
    merchant_socket_roles: {string}
    persistent_cookie: boolean
    idle_seconds: integer
