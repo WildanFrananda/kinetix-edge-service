@@ -21,6 +21,11 @@ errors.catalogue = {
       "CODE_REFUSED",
       "The code was not accepted. Try the next one, or sign in again if this keeps happening."
    ),
+   PASSKEY_REFUSED = entry(
+      401,
+      "PASSKEY_REFUSED",
+      "The passkey was not accepted. Try again, or use the code from the authenticator app."
+   ),
    SIGN_IN_REQUIRED = entry(401, "SIGN_IN_REQUIRED", "No sign-in is in progress, or it has expired. Sign in again."),
    SESSION_REQUIRED = entry(401, "SESSION_REQUIRED", "Sign in first."),
    SESSION_ENDED = entry(401, "SESSION_ENDED", "The session has ended. Sign in again."),

@@ -5,6 +5,7 @@ local record FakeUser
    role: string
    principal_id: string
    two_factor: boolean
+   passkeys: boolean
    secret_issued: boolean
 end
 

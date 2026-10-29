@@ -24,6 +24,10 @@ local function offers_sign_up(app: AppPolicy): boolean
    return app.sign_up
 end
 
+local function offers_passkeys(app: AppPolicy): boolean
+   return app.passkeys
+end
+
 local function offers_merchant_socket(app: AppPolicy): boolean
    return #app.merchant_socket_roles > 0
 end
@@ -77,6 +81,24 @@ router.routes = {
       methods = { "POST" },
       for_app = true,
       handler = sign_in.verify,
+   },
+   {
+      path = "/bff/2fa/passkey/options",
+      prefix = false,
+      name = "/bff/2fa/passkey/options",
+      methods = { "POST" },
+      for_app = true,
+      offered = offers_passkeys,
+      handler = sign_in.passkey_options,
+   },
+   {
+      path = "/bff/2fa/passkey/verify",
+      prefix = false,
+      name = "/bff/2fa/passkey/verify",
+      methods = { "POST" },
+      for_app = true,
+      offered = offers_passkeys,
+      handler = sign_in.passkey_verify,
    },
    {
       path = "/bff/2fa/setup",

@@ -5,6 +5,8 @@ local record FakeSettings
    logout_mode: string
    register_mode: string
    verify_codes: string
+   passkeys_flag: string
+   passkey_mode: string
    access_expires_in: integer
    roles: {string: string}
 end

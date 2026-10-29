@@ -1,8 +1,10 @@
+local cjson = require("cjson.safe")
 local context = require("http.context")
 local cookies = require("http.cookies")
 local identity_answers = require("http.identity_answers")
 local identity_client = require("adapters.identity_client")
 local json_body = require("http.json_body")
+local json_relay = require("adapters.json_relay")
 local lifetimes = require("http.lifetimes")
 local logger = require("adapters.logger")
 local metrics = require("adapters.metrics")
@@ -12,13 +14,19 @@ local respond = require("http.respond")
 local sessions = require("http.sessions")
 local clock = require("adapters.clock")
 local errors = require("http.errors")
+local type AppPolicy = require("types.app_policy")
+local type ChallengeView = require("types.challenge_view")
+local type PendingSignIn = require("types.pending_sign_in")
 local type RequestContext = require("types.request_context")
 local type SessionView = require("types.session_view")
+local type SignInAnswer = require("types.sign_in_answer")
 local type TokenGrant = require("types.token_grant")
 local type UpstreamReply = require("types.upstream_reply")
 
 local record sign_in
 end
+
+local PASSKEY_BODY_LONGEST = 16384
 
 local function cookie_header(request: RequestContext): string
    return context.joined(request.headers, "cookie", "; ")
@@ -132,21 +140,22 @@ function sign_in.start_session(
    respond.json(status, view, set_cookies)
 end
 
-local function start_pending(
-   client: redis.Client,
-   request: RequestContext,
-   kind: string,
-   token: string,
-   user_id: integer,
-   expires_in: integer
-)
+local function challenge_view(app: AppPolicy, passkeys: boolean): ChallengeView
+   if app.passkeys then
+      return { mfaRequired = true, passkeys = passkeys }
+   end
+
+   return { mfaRequired = true }
+end
+
+local function start_pending(client: redis.Client, request: RequestContext, answer: SignInAnswer)
    local value, lifetime, failure = sessions.begin_pending(
       client,
       request,
-      kind == "challenge" and "challenge" or "enrolment",
-      token,
-      user_id,
-      expires_in,
+      answer.kind == "challenge" and "challenge" or "enrolment",
+      answer.token,
+      answer.user_id,
+      answer.expires_in,
       sign_in.pending_cookie(request)
    )
    if value == nil then
@@ -154,8 +163,8 @@ local function start_pending(
    end
 
    local set_cookies: {string} = { cookies.pending(value, lifetime) }
-   if kind == "challenge" then
-      return respond.json(200, { mfaRequired = true }, set_cookies)
+   if answer.kind == "challenge" then
+      return respond.json(200, challenge_view(request.app, answer.passkeys), set_cookies)
    end
 
    respond.json(200, { mfaEnrolmentRequired = true }, set_cookies)
@@ -193,7 +202,7 @@ local function settle_login(client: redis.Client, request: RequestContext, reply
    end
 
    if answer.kind == "challenge" then
-      return start_pending(client, request, "challenge", answer.token, nil, answer.expires_in)
+      return start_pending(client, request, answer)
    end
 
    if answer.kind == "enrolment" then
@@ -202,7 +211,7 @@ local function settle_login(client: redis.Client, request: RequestContext, reply
          return respond.error("ROLE_REFUSED", request.request_id, nil)
       end
 
-      return start_pending(client, request, "enrolment", answer.token, answer.user_id, answer.expires_in)
+      return start_pending(client, request, answer)
    end
 
    sign_in.not_understood(request, reply, "login")
@@ -235,31 +244,71 @@ local function no_pending(client: redis.Client, request: RequestContext, value: 
    respond.error("SIGN_IN_REQUIRED", request.request_id, set_cookies)
 end
 
-local function settle_verify(client: redis.Client, request: RequestContext, reply: UpstreamReply, value: string)
-   if sign_in.refused_by_identity(request, reply, "verify") then
-      return
-   end
-
+local function settled_as_refusal(
+   client: redis.Client,
+   request: RequestContext,
+   reply: UpstreamReply,
+   value: string,
+   kept: string
+): boolean
    if reply.status == 401 then
       local code = identity_answers.error_code(identity_answers.document(reply.body))
       if identity_answers.ends_challenge(code) then
          logger.info("challenge_ended", { reason = code, request_id = request.request_id })
-         return no_pending(client, request, value)
+         no_pending(client, request, value)
+         return true
       end
 
-      return respond.error("CODE_REFUSED", request.request_id, nil)
+      respond.error(kept, request.request_id, nil)
+      return true
    end
 
    if reply.status == 400 then
-      return respond.error("INVALID_REQUEST", request.request_id, nil)
+      respond.error("INVALID_REQUEST", request.request_id, nil)
+      return true
+   end
+
+   return false
+end
+
+local function settle_challenge(
+   client: redis.Client,
+   request: RequestContext,
+   reply: UpstreamReply,
+   value: string,
+   stage: string,
+   kept: string
+)
+   if sign_in.refused_by_identity(request, reply, stage)
+      or settled_as_refusal(client, request, reply, value, kept) then
+      return
    end
 
    local grant = reply.status == 200 and identity_answers.grant(identity_answers.document(reply.body)) or nil
    if grant == nil then
-      return sign_in.not_understood(request, reply, "verify")
+      return sign_in.not_understood(request, reply, stage)
    end
 
-   sign_in.start_session(client, request, grant, "verify", 200)
+   sign_in.start_session(client, request, grant, stage, 200)
+end
+
+local function on_challenge(request: RequestContext, settle: function(redis.Client, string, PendingSignIn))
+   local client = sign_in.open(request)
+   if client == nil then
+      return
+   end
+
+   local value = sign_in.pending_cookie(request)
+   local pending, failure = sessions.pending(client, request, value, "challenge")
+   if failure ~= nil then
+      respond.error(failure, request.request_id, nil)
+   elseif pending == nil then
+      no_pending(client, request, value)
+   else
+      settle(client, value, pending)
+   end
+
+   redis_store.release(client)
 end
 
 local function code_of(request: RequestContext): string
@@ -277,22 +326,69 @@ function sign_in.verify(request: RequestContext)
       return
    end
 
-   local client = sign_in.open(request)
-   if client == nil then
+   on_challenge(request, function(client: redis.Client, value: string, pending: PendingSignIn)
+      local reply = identity_client.verify(request, pending.token, code)
+      settle_challenge(client, request, reply, value, "verify", "CODE_REFUSED")
+   end)
+end
+
+local function settle_passkey_options(
+   client: redis.Client,
+   request: RequestContext,
+   reply: UpstreamReply,
+   value: string
+)
+   if sign_in.refused_by_identity(request, reply, "passkey_options")
+      or settled_as_refusal(client, request, reply, value, "PASSKEY_REFUSED") then
       return
    end
 
-   local value = sign_in.pending_cookie(request)
-   local pending, failure = sessions.pending(client, request, value, "challenge")
-   if failure ~= nil then
-      respond.error(failure, request.request_id, nil)
-   elseif pending == nil then
-      no_pending(client, request, value)
-   else
-      settle_verify(client, request, identity_client.verify(request, pending.token, code), value)
+   if reply.status == 409
+      and identity_answers.error_code(identity_answers.document(reply.body)) == "NO_PASSKEYS" then
+      respond.error("PASSKEY_REFUSED", request.request_id, nil)
+      return
    end
 
-   redis_store.release(client)
+   local options = reply.status == 200 and json_relay.object(json_relay.document(reply.body), "options") or nil
+   local body = options ~= nil and json_relay.encode({ options = options }) or nil
+   if body == nil then
+      return sign_in.not_understood(request, reply, "passkey_options")
+   end
+
+   respond.raw(200, body, nil)
+end
+
+function sign_in.passkey_options(request: RequestContext)
+   on_challenge(request, function(client: redis.Client, value: string, pending: PendingSignIn)
+      settle_passkey_options(client, request, identity_client.passkey_options(request, pending.token), value)
+   end)
+end
+
+local function credential_of(request: RequestContext): cjson.Object
+   local raw = json_body.raw()
+   local credential: cjson.Object = nil
+   if raw ~= nil and #raw <= PASSKEY_BODY_LONGEST then
+      credential = json_relay.object(json_relay.document(raw), "credential")
+   end
+
+   if credential == nil or json_relay.encode(credential) == nil then
+      respond.error("INVALID_REQUEST", request.request_id, nil)
+      return nil
+   end
+
+   return credential
+end
+
+function sign_in.passkey_verify(request: RequestContext)
+   local credential = credential_of(request)
+   if credential == nil then
+      return
+   end
+
+   on_challenge(request, function(client: redis.Client, value: string, pending: PendingSignIn)
+      local reply = identity_client.passkey_verify(request, pending.token, credential)
+      settle_challenge(client, request, reply, value, "passkey_verify", "PASSKEY_REFUSED")
+   end)
 end
 
 local function settle_enrolment_refusal(

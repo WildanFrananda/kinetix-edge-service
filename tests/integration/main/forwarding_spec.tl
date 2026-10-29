@@ -101,6 +101,9 @@ describe("the API forwarder", function()
 
       local register = client.edge("POST", "/bff/api/v1/auth/register", { cookie = cookie, body = "{}" })
       check.equal(register.status, 404, "register, which issues tokens too")
+
+      local passkey = client.edge("POST", "/bff/api/v1/auth/2fa/passkey/verify", { cookie = cookie, body = "{}" })
+      check.equal(passkey.status, 404, "the passkey sign-in, which issues tokens too")
       check.equal(fake.count("login"), 1, "only the sign-in of the setup reached identity")
    end)
 

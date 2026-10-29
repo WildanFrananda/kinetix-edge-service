@@ -7,6 +7,7 @@ local socket = require("tests.support.socket")
 local type Answer = require("tests.support.types.answer")
 
 local ANY_SESSION = flows.session(string.rep("Q", 43))
+local ANY_PENDING = flows.pending(string.rep("P", 43))
 
 local function unavailable(answer: Answer, label: string)
    check.equal(answer.status, 503, label)
@@ -38,6 +39,23 @@ describe("with Redis unreachable", function()
          socket.upgrade(socket.path, { cookie = ANY_SESSION }, scenario.origin("seller-web")),
          "merchant socket"
       )
+   end)
+
+   it("refuses a passkey sign-in before identity is asked", function()
+      unavailable(
+         client.edge("POST", "/bff/2fa/passkey/options", { app = "backoffice", cookie = ANY_PENDING }),
+         "passkey options"
+      )
+      unavailable(
+         client.edge(
+            "POST",
+            "/bff/2fa/passkey/verify",
+            { app = "backoffice", cookie = ANY_PENDING, body = client.json({ credential = { id = "Y3JlZA" } }) }
+         ),
+         "passkey verify"
+      )
+      check.equal(fake.count("passkey_options"), 0, "identity not asked for options")
+      check.equal(fake.count("passkey_verify"), 0, "identity not asked to verify")
    end)
 
    it("refuses a sign-up before identity is asked", function()

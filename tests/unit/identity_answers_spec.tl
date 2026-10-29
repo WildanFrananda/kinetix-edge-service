@@ -22,6 +22,25 @@ describe("identity_answers", function()
       check.equal(answer.kind, "challenge", "kind")
       check.equal(answer.token, "c.h.l", "token")
       check.equal(answer.expires_in, 300, "lifetime")
+      check.equal(answer.passkeys, false, "no passkeys named")
+   end)
+
+   it("reads whether the challenge can be answered with a passkey", function()
+      local with = identity_answers.sign_in(
+         identity_answers.document([[{"mfaRequired":true,"challengeToken":"c","expiresIn":300,"passkeys":true}]])
+      )
+      check.equal(with.kind, "challenge", "kind")
+      check.equal(with.passkeys, true, "passkeys")
+
+      local without = identity_answers.sign_in(
+         identity_answers.document([[{"mfaRequired":true,"challengeToken":"c","expiresIn":300,"passkeys":false}]])
+      )
+      check.equal(without.passkeys, false, "no passkeys")
+
+      local loose = identity_answers.sign_in(
+         identity_answers.document([[{"mfaRequired":true,"challengeToken":"c","expiresIn":300,"passkeys":"yes"}]])
+      )
+      check.equal(loose.passkeys, false, "only a boolean true counts")
    end)
 
    it("reads an admin's restricted enrolment session", function()

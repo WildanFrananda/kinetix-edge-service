@@ -22,9 +22,22 @@ describe("api_path", function()
       check.truthy(api_path.is_refused("/api/v1/AUTH/Login"), "case")
       check.truthy(api_path.is_refused("/api/v1/auth/refresh/"), "suffix")
       check.truthy(api_path.is_refused("/api/v1/auth/2fa/verify"), "verify")
+      check.truthy(api_path.is_refused("/api/v1/auth/2fa/passkey/verify"), "passkey verify")
+      check.truthy(api_path.is_refused("/api/v1/auth/2fa/Passkey/Verify/"), "passkey verify, case and suffix")
       check.truthy(api_path.is_refused("/api/v1/couriers/register"), "courier registration")
       check.falsy(api_path.is_refused("/api/v1/auth/me"), "me")
       check.falsy(api_path.is_refused("/api/v1/auth/loginx"), "a longer word")
+   end)
+
+   it("forwards passkey management, which issues no token, to identity", function()
+      for _, path in ipairs({
+         "/api/v1/auth/passkeys/7",
+         "/api/v1/auth/passkeys/7/options",
+         "/api/v1/auth/passkeys/7/0f6c2d4e-8a1b-4c3d-9e5f-6a7b8c9d0e1f",
+      }) do
+         check.falsy(api_path.is_refused(path), path .. " is not refused")
+         check.truthy(api_path.is_identity(path), path .. " goes to identity")
+      end
    end)
 
    it("sends identity's own routes to identity, and nothing else", function()

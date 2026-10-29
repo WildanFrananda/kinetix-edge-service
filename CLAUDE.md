@@ -47,7 +47,7 @@ The role comes from identity's answer (`user.role`), at sign-in and at every ref
 identity with the pair just issued. An enrolment answer carries no role, but identity gives one only to an admin
 without a second factor, so the seller web (no admin) refuses it with `ROLE_REFUSED`; the enrolment token cannot be
 logged out (identity's logout takes an access token) and expires in 600 s. A pending sign-in is bound to its kind and
-app: an enrolment cannot answer `/bff/2fa/verify`, and using the wrong endpoint ends it.
+app: an enrolment cannot answer `/bff/2fa/verify` or the passkey routes, and using the wrong endpoint ends it.
 
 ## Outages are 503, and logout too
 
@@ -112,6 +112,29 @@ the pending sign-in; `CHALLENGE_EXHAUSTED`, `CHALLENGE_SPENT` and `CHALLENGE_INV
 pending record deleted and its cookie expired. Any other 401, from an identity without the codes, keeps the old
 mapping (`CODE_REFUSED`), so the edge may deploy first.
 
+## Passkeys answer the challenge on the backoffice only
+
+The contract is infra `docs/PASSKEYS.md` (2026-10-29). identity's challenge answer gains `passkeys`; the edge passes it
+on as `{ mfaRequired: true, passkeys }` (only a JSON `true` is true) on apps whose policy says `passkeys`, the
+backoffice. The seller web's clients parse `{ mfaRequired: true }` strictly, so an extra key would break their
+sign-in: its answer is unchanged and neither passkey route is offered there (404). identity's WebAuthn origin is the
+backoffice's anyway. Known limit: the WireGuard face is an IP address, where WebAuthn can never work, and still hears
+identity's flag.
+
+`/bff/2fa/passkey/options` and `/bff/2fa/passkey/verify` take the pending challenge exactly as `/bff/2fa/verify` does
+and share its code (`on_challenge`, `settle_challenge`): the same pending lookup, refusal mapping, role gate, cookie and
+pending cleanup. A 401 that does not end the challenge (identity's `PASSKEY_REFUSED`) is `PASSKEY_REFUSED` and keeps
+the pending sign-in, so another passkey or the code can follow; `CHALLENGE_*` ends it. identity must answer both with
+200, as its other sign-in routes do. identity's `409 NO_PASSKEYS` at options (the account's passkeys were removed
+between the password and this step) is `PASSKEY_REFUSED` too, the pending sign-in kept for the code; until
+2026-10-29 it read as an answer not understood (502).
+
+identity's request options and the browser's credential go through `adapters/json_relay`, a lua-cjson instance of its
+own that decodes arrays with `array_mt`: the shared instance re-encodes `[]` as `{}` (`allowCredentials`,
+`transports`), which a browser or `@simplewebauthn/server` would refuse. It also rejects NaN, Infinity and hex numbers,
+and the edge refuses a credential it cannot encode again. The credential must be a JSON object and the body at most
+16 KiB (an assertion is under 2 KiB); anything else is `INVALID_REQUEST` before Redis or identity is asked.
+
 ## Forgery checks come first
 
 The order is route, method, app by host name, browser address, the route offered on that app (else 404), CSRF, JSON
@@ -158,8 +181,10 @@ limit in another service sees the edge.
 Request headers are a list (`config/forwarding.tl`); everything else stays behind, `Cookie`, `Authorization` and every
 `X-Kinetix-*` included. `Host` is the upstream URL's own. The path is nginx's normalized `$uri` with each segment
 re-escaped, so a decoded `%2F` becomes a separator and the refusal list sees exactly what is sent. identity's
-token-issuing routes (login, register, refresh, logout, `2fa/verify`, courier registration) are refused with 404: a
-forwarded answer must never hand a token to JavaScript. `Set-Cookie`, hop-by-hop and cache headers are dropped.
+token-issuing routes (login, register, refresh, logout, `2fa/verify`, `2fa/passkey/verify`, courier registration) are
+refused with 404: a forwarded answer must never hand a token to JavaScript. Passkey management
+(`/api/v1/auth/passkeys/...`) issues none and is forwarded like any `/api/v1/auth` call. `Set-Cookie`, hop-by-hop and
+cache headers are dropped.
 
 A state change with no body (the backoffice's approve and reject, `POST /api/v1/sellers/{id}/verify` and the like) is
 forwarded with an empty body and `Content-Length: 0`. Until 2026-10-29 the forwarder turned an empty body into `nil`,
@@ -171,10 +196,10 @@ approve was pressed in the lab. `forwarding_spec.tl` sends all four methods with
 ## Logs and metrics
 
 One JSON line per request to stderr (method, route template, status, duration, request id, app, and an 8-hex prefix of
-the cookie's SHA-256). No body, cookie, token, email, password or code is ever logged; the integration harness greps
-the edge's log for every cookie value it received and for the fakes' tokens, emails and codes. `service` is a label
-only on `kinetix_build_info` (`kinetix-edge-service`), as in every service: Prometheus sets it per target, and an
-exposed `service` label would collide with it.
+the cookie's SHA-256). No body, cookie, token, email, password, code or passkey credential is ever logged; the
+integration harness greps the edge's log for every cookie value it received and for the fakes' tokens, emails, codes and
+passkey values. `service` is a label only on `kinetix_build_info` (`kinetix-edge-service`), as in every service:
+Prometheus sets it per target, and an exposed `service` label would collide with it.
 
 ## Teal here
 
