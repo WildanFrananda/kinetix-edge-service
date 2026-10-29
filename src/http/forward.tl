@@ -31,10 +31,6 @@ local function relay(request: RequestContext, path: string, session: Session)
       if body == nil then
          return respond.error("PAYLOAD_TOO_LARGE", request.request_id, nil)
       end
-
-      if body == "" then
-         body = nil
-      end
    end
 
    local environment = settings.current.environment

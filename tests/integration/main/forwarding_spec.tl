@@ -73,6 +73,16 @@ describe("the API forwarder", function()
       check.equal(echoed_headers(answer)["content-type"], "application/json", "content type")
    end)
 
+   it("forwards a state change that carries no body, as an empty one", function()
+      for _, method in ipairs({ "POST", "PUT", "PATCH", "DELETE" }) do
+         local answer = client.edge(method, "/bff/api/v1/sellers/57/verify", { cookie = cookie })
+         check.equal(answer.status, 200, method .. " status")
+         check.equal(client.text(answer, "method"), method, method .. " method")
+         check.equal(client.text(answer, "body"), "", method .. " body")
+         check.equal(echoed_headers(answer)["content-length"], "0", method .. " length")
+      end
+   end)
+
    it("passes the upstream's status through", function()
       local answer = client.edge("GET", "/bff/api/v1/fake/status/418", { cookie = cookie })
       check.equal(answer.status, 418, "status")

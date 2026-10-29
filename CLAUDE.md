@@ -161,6 +161,13 @@ re-escaped, so a decoded `%2F` becomes a separator and the refusal list sees exa
 token-issuing routes (login, register, refresh, logout, `2fa/verify`, courier registration) are refused with 404: a
 forwarded answer must never hand a token to JavaScript. `Set-Cookie`, hop-by-hop and cache headers are dropped.
 
+A state change with no body (the backoffice's approve and reject, `POST /api/v1/sellers/{id}/verify` and the like) is
+forwarded with an empty body and `Content-Length: 0`. Until 2026-10-29 the forwarder turned an empty body into `nil`,
+and lua-resty-http 0.18.0 refuses `nil` for `POST`, `PUT` and `PATCH` before it connects ("Request body is nil but POST
+method expects a body"); the refusal came back as `reached = false`, so every such call was answered 503
+`API_UNAVAILABLE` within milliseconds, an outage that was the edge's own fault. Found when the backoffice's first
+approve was pressed in the lab. `forwarding_spec.tl` sends all four methods without a body.
+
 ## Logs and metrics
 
 One JSON line per request to stderr (method, route template, status, duration, request id, app, and an 8-hex prefix of
