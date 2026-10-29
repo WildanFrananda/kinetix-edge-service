@@ -241,6 +241,16 @@ catalogue.mutations = {
       integration = { "forwarding" },
    },
    {
+      id = "forward-empty-body",
+      check = "a state change with no body is forwarded with an empty one, not refused by the client",
+      file = "src/http/forward.tl",
+      old = "         return respond.error(\"PAYLOAD_TOO_LARGE\", request.request_id, nil)\n      end\n",
+      new = "         return respond.error(\"PAYLOAD_TOO_LARGE\", request.request_id, nil)\n      end\n"
+         .. "\n      if body == \"\" then\n         body = nil\n      end\n",
+      unit = {},
+      integration = { "forwarding" },
+   },
+   {
       id = "forward-set-cookie",
       check = "an upstream Set-Cookie is never passed back",
       file = "config/forwarding.tl",
