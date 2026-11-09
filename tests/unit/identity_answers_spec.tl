@@ -85,6 +85,22 @@ describe("identity_answers", function()
       check.falsy(identity_answers.ends_challenge(nil), "no code")
    end)
 
+   it("calls a refusal of the edge's own configuration, the client or the face, not the browser's", function()
+      for _, code in ipairs({
+         "UNKNOWN_CLIENT",
+         "CLIENT_REQUIRED",
+         "CLIENT_PROOF_REQUIRED",
+         "CLIENT_PROOF_INVALID",
+         "ORIGIN_UNKNOWN",
+      }) do
+         check.truthy(identity_answers.is_client_refusal(code), code)
+      end
+
+      check.falsy(identity_answers.is_client_refusal("PASSKEY_REFUSED"), "a refused passkey is the browser's")
+      check.falsy(identity_answers.is_client_refusal("NO_PASSKEYS"), "no passkey is the account's")
+      check.falsy(identity_answers.is_client_refusal(nil), "no code")
+   end)
+
    it("reads identity's validation messages, one or many", function()
       check.equal(
          identity_answers.validation_message(identity_answers.document([[{"message":["a must be b","c must be d"]}]])),

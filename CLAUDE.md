@@ -117,9 +117,8 @@ mapping (`CODE_REFUSED`), so the edge may deploy first.
 The contract is infra `docs/PASSKEYS.md` (2026-10-29). identity's challenge answer gains `passkeys`; the edge passes it
 on as `{ mfaRequired: true, passkeys }` (only a JSON `true` is true) on apps whose policy says `passkeys`, the
 backoffice. The seller web's clients parse `{ mfaRequired: true }` strictly, so an extra key would break their
-sign-in: its answer is unchanged and neither passkey route is offered there (404). identity's WebAuthn origin is the
-backoffice's anyway. Known limit: the WireGuard face is an IP address, where WebAuthn can never work, and still hears
-identity's flag.
+sign-in: its answer is unchanged and neither passkey route is offered there (404). identity's WebAuthn origins are the
+backoffice's anyway. Each face's flag is identity's for that face ("identity is told the face" below).
 
 `/bff/2fa/passkey/options` and `/bff/2fa/passkey/verify` take the pending challenge exactly as `/bff/2fa/verify` does
 and share its code (`on_challenge`, `settle_challenge`): the same pending lookup, refusal mapping, role gate, cookie and
@@ -135,6 +134,23 @@ own that decodes arrays with `array_mt`: the shared instance re-encodes `[]` as 
 and the edge refuses a credential it cannot encode again. The credential must be a JSON object and the body at most
 16 KiB (an assertion is under 2 KiB); anything else is `INVALID_REQUEST` before Redis or identity is asked.
 
+## identity is told the face
+
+A passkey belongs to the host it was made on, so identity keeps one relying party per backoffice face (infra
+`docs/BACKOFFICE-TUNNEL-NAME.md`, 2026-11-09) and has to know which face a request came from. The edge says so in
+`X-Kinetix-Origin`: the configured origin of the face the request's host was matched to, the one its `Origin` was
+checked against (`context.face_origin`), never a header the browser sent; a state change admitted on
+`Sec-Fetch-Site: same-origin` without an `Origin` still names its face. It goes on `/bff/login`,
+`/bff/2fa/passkey/options` and `/bff/2fa/passkey/verify`, and on `/bff/api` calls forwarded to identity under
+`forwarding.face_paths` (`/api/v1/auth/passkeys`), on apps whose policy says `passkeys`: the backoffice. The seller web
+names none, and neither do the code, refresh, logout or any other forwarded call. A browser's own `X-Kinetix-Origin`
+never travels: identity's calls are built from nothing, and the forwarder's request headers are a list without it.
+identity without the header acts for its first origin, so this edge may deploy before or after identity. identity's 400
+`ORIGIN_UNKNOWN` (a face the edge serves and identity's `IDENTITY_WEBAUTHN_ORIGINS` lacks) refuses the edge's own
+configuration, like `UNKNOWN_CLIENT`: on the passkey sign-in routes it is 502 `IDENTITY_FAILED`, logged as
+`identity_answer_not_understood`, and the pending sign-in stays for the code; under `/bff/api` it is relayed as identity
+answered it.
+
 ## Forgery checks come first
 
 The order is route, method, app by host name, browser address, the route offered on that app (else 404), CSRF, JSON
@@ -145,8 +161,9 @@ counted as a CSRF refusal with reason `content_type`.
 
 The gateway preserves the browser's `Host`. The seller web has one host (`KINETIX_SELLER_HOST`, origin `https://` +
 host). The backoffice has a list of origins, `KINETIX_BACKOFFICE_ORIGINS` (2026-10-28, infra `docs/BACKOFFICE.md` §10):
-in production its onion service (`http://<address>.onion`) and the WireGuard fallback (`https://<tunnel address>`), in
-the lab `https://backoffice.localhost:8443`. Each origin is a face of the one backoffice app, the same name, client,
+in production its onion service and the WireGuard face, a name (`https://backoffice.kinetix.internal`, infra
+`docs/BACKOFFICE-TUNNEL-NAME.md`) where it was the tunnel address until 2026-11, in the lab
+`https://backoffice.localhost:8443`. Each origin is a face of the one backoffice app, the same name, client,
 roles, enrolment and lifetimes, so a session is a backoffice session whichever face started it; the `__Host-` cookie
 keeps each face's sessions to its own host anyway. A request is matched to a face by host name without the port, and
 its `Origin` must equal that face's origin exactly: an onion request carrying the tunnel's origin is a forgery.
@@ -171,20 +188,22 @@ under `forwarding.identity_paths` (`/api/v1/auth`, `/api/v1/couriers`: the contr
 straight to `IDENTITY_HTTP_URL` with the browser's address as the only `X-Forwarded-For` entry, the session's bearer,
 the request id and the app's `X-Kinetix-Client`. The token-issuing routes stay refused before this choice. On this path
 Kong's `jwt` plugin does not run: identity verifies every token itself (`JwtAuthGuard` is global, revocation included),
-and the backoffice is reached only through its onion (client authorization at Tor) or the gateway's staff gate. `/api/v1/users` and
-`/api/v1/sellers` are not throttled by identity and stay on the gateway; a throttle added there moves them onto the list.
+and the backoffice is reached only through its onion (client authorization at Tor) or the gateway's staff gate.
+`/api/v1/users` and `/api/v1/sellers` are not throttled by identity and stay on the gateway; a throttle added there
+moves them onto the list.
 Everything else goes to the gateway's internal listener, where the twin appends the edge's address, so a per-address
 limit in another service sees the edge.
 
 ## What is forwarded
 
 Request headers are a list (`config/forwarding.tl`); everything else stays behind, `Cookie`, `Authorization` and every
-`X-Kinetix-*` included. `Host` is the upstream URL's own. The path is nginx's normalized `$uri` with each segment
-re-escaped, so a decoded `%2F` becomes a separator and the refusal list sees exactly what is sent. identity's
-token-issuing routes (login, register, refresh, logout, `2fa/verify`, `2fa/passkey/verify`, courier registration) are
-refused with 404: a forwarded answer must never hand a token to JavaScript. Passkey management
-(`/api/v1/auth/passkeys/...`) issues none and is forwarded like any `/api/v1/auth` call. `Set-Cookie`, hop-by-hop and
-cache headers are dropped.
+`X-Kinetix-*` included. The edge adds its own: the bearer, the request id, the browser's address, and for identity the
+app's `X-Kinetix-Client` and, on passkey management, the face's `X-Kinetix-Origin`. `Host` is the upstream URL's own.
+The path is nginx's normalized `$uri` with each segment re-escaped, so a decoded `%2F` becomes a separator and the
+refusal list sees exactly what is sent. identity's token-issuing routes (login, register, refresh, logout, `2fa/verify`,
+`2fa/passkey/verify`, courier registration) are refused with 404: a forwarded answer must never hand a token to
+JavaScript. Passkey management (`/api/v1/auth/passkeys/...`) issues none and is forwarded like any `/api/v1/auth` call.
+`Set-Cookie`, hop-by-hop and cache headers are dropped.
 
 A state change with no body (the backoffice's approve and reject, `POST /api/v1/sellers/{id}/verify` and the like) is
 forwarded with an empty body and `Content-Length: 0`. Until 2026-10-29 the forwarder turned an empty body into `nil`,

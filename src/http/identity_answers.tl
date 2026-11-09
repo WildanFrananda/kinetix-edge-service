@@ -11,6 +11,7 @@ local CLIENT_CONFIGURATION_REFUSALS: {string: boolean} = {
    ["CLIENT_REQUIRED"] = true,
    ["CLIENT_PROOF_REQUIRED"] = true,
    ["CLIENT_PROOF_INVALID"] = true,
+   ["ORIGIN_UNKNOWN"] = true,
 }
 
 local ENDED_CHALLENGES: {string: boolean} = {

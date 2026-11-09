@@ -40,6 +40,16 @@ describe("api_path", function()
       end
    end)
 
+   it("names the face only to passkey management, whose relying party depends on it", function()
+      check.truthy(api_path.needs_face("/api/v1/auth/passkeys/7"), "list")
+      check.truthy(api_path.needs_face("/api/v1/auth/passkeys/7/options"), "options")
+      check.truthy(api_path.needs_face("/api/v1/AUTH/Passkeys/7/0f6c2d4e-8a1b-4c3d-9e5f-6a7b8c9d0e1f"), "case")
+      check.falsy(api_path.needs_face("/api/v1/auth/me"), "me")
+      check.falsy(api_path.needs_face("/api/v1/auth/2fa/disable/7"), "two-factor")
+      check.falsy(api_path.needs_face("/api/v1/auth/passkeysx/7"), "a longer word")
+      check.falsy(api_path.needs_face("/api/v1/couriers/applications"), "couriers")
+   end)
+
    it("sends identity's own routes to identity, and nothing else", function()
       check.truthy(api_path.is_identity("/api/v1/auth/me"), "auth")
       check.truthy(api_path.is_identity("/api/v1/AUTH/2fa/disable/7"), "auth, in capitals")

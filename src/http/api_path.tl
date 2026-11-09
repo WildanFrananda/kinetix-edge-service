@@ -48,4 +48,8 @@ function api_path.is_identity(path: string): boolean
    return under_any(path, forwarding.identity_paths)
 end
 
+function api_path.needs_face(path: string): boolean
+   return under_any(path, forwarding.face_paths)
+end
+
 return api_path

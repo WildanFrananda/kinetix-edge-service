@@ -7,6 +7,7 @@ local record FakeSettings
    verify_codes: string
    passkeys_flag: string
    passkey_mode: string
+   known_origins: {string}
    access_expires_in: integer
    roles: {string: string}
 end

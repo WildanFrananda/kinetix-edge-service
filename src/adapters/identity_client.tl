@@ -1,6 +1,7 @@
 local cjson = require("cjson.safe")
 local http_client = require("adapters.http_client")
 local json_relay = require("adapters.json_relay")
+local request_context = require("http.context")
 local settings = require("http.settings")
 local timing = require("config.timing")
 local type RequestContext = require("types.request_context")
@@ -15,7 +16,13 @@ local TIMEOUTS: http_client.Timeouts = {
    read_ms = timing.identity_read_ms,
 }
 
-local function post(context: RequestContext, path: string, body: string, bearer: string): UpstreamReply
+local function post(
+   context: RequestContext,
+   path: string,
+   body: string,
+   bearer: string,
+   face: string
+): UpstreamReply
    local headers: {string: string} = {
       ["Accept"] = "application/json",
       ["Content-Type"] = "application/json",
@@ -25,6 +32,10 @@ local function post(context: RequestContext, path: string, body: string, bearer:
    }
    if bearer ~= nil then
       headers["Authorization"] = "Bearer " .. bearer
+   end
+
+   if face ~= nil then
+      headers["X-Kinetix-Origin"] = face
    end
 
    return http_client.request(
@@ -37,25 +48,25 @@ end
 function identity_client.login(context: RequestContext, email: string, password: string): UpstreamReply
    local body = cjson.encode({ email = email, password = password })
 
-   return post(context, "/api/v1/auth/login", body, nil)
+   return post(context, "/api/v1/auth/login", body, nil, request_context.face_origin(context))
 end
 
 function identity_client.register(context: RequestContext, email: string, password: string): UpstreamReply
    local body = cjson.encode({ email = email, password = password })
 
-   return post(context, "/api/v1/auth/register", body, nil)
+   return post(context, "/api/v1/auth/register", body, nil, nil)
 end
 
 function identity_client.verify(context: RequestContext, challenge_token: string, code: string): UpstreamReply
    local body = cjson.encode({ challengeToken = challenge_token, code = code })
 
-   return post(context, "/api/v1/auth/2fa/verify", body, nil)
+   return post(context, "/api/v1/auth/2fa/verify", body, nil, nil)
 end
 
 function identity_client.passkey_options(context: RequestContext, challenge_token: string): UpstreamReply
    local body = cjson.encode({ challengeToken = challenge_token })
 
-   return post(context, "/api/v1/auth/2fa/passkey/options", body, nil)
+   return post(context, "/api/v1/auth/2fa/passkey/options", body, nil, request_context.face_origin(context))
 end
 
 function identity_client.passkey_verify(
@@ -65,11 +76,11 @@ function identity_client.passkey_verify(
 ): UpstreamReply
    local body = json_relay.encode({ challengeToken = challenge_token, credential = credential })
 
-   return post(context, "/api/v1/auth/2fa/passkey/verify", body, nil)
+   return post(context, "/api/v1/auth/2fa/passkey/verify", body, nil, request_context.face_origin(context))
 end
 
 function identity_client.setup(context: RequestContext, enrolment_token: string, user_id: integer): UpstreamReply
-   return post(context, "/api/v1/auth/2fa/setup/" .. string.format("%d", user_id), "{}", enrolment_token)
+   return post(context, "/api/v1/auth/2fa/setup/" .. string.format("%d", user_id), "{}", enrolment_token, nil)
 end
 
 function identity_client.enable(
@@ -80,19 +91,19 @@ function identity_client.enable(
 ): UpstreamReply
    local body = cjson.encode({ code = code })
 
-   return post(context, "/api/v1/auth/2fa/enable/" .. string.format("%d", user_id), body, enrolment_token)
+   return post(context, "/api/v1/auth/2fa/enable/" .. string.format("%d", user_id), body, enrolment_token, nil)
 end
 
 function identity_client.refresh(context: RequestContext, refresh_token: string): UpstreamReply
    local body = cjson.encode({ refreshToken = refresh_token })
 
-   return post(context, "/api/v1/auth/refresh", body, nil)
+   return post(context, "/api/v1/auth/refresh", body, nil, nil)
 end
 
 function identity_client.logout(context: RequestContext, access_token: string, refresh_token: string): UpstreamReply
    local body = cjson.encode({ refreshToken = refresh_token })
 
-   return post(context, "/api/v1/auth/logout", body, access_token)
+   return post(context, "/api/v1/auth/logout", body, access_token, nil)
 end
 
 return identity_client

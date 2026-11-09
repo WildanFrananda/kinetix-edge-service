@@ -9,6 +9,7 @@ local passkey_fixture = require("tests.integration.fakes.passkey_fixture")
 local redis_admin = require("tests.support.redis_admin")
 local scenario = require("tests.support.scenario")
 local type Answer = require("tests.support.types.answer")
+local type EdgeRequest = require("tests.support.types.edge_request")
 
 local ATTRIBUTES = "; Path=/; Secure; HttpOnly; SameSite=Strict"
 local EXPIRED_PENDING = "__Host-kx_pending=" .. ATTRIBUTES .. "; Max-Age=0"
@@ -96,6 +97,24 @@ local function pending_ended(answer: Answer, label: string)
    check.equal(#redis_admin.keys("edge:pending:*"), 0, label .. ": pending gone")
 end
 
+local function face_heard(endpoint: string, origin: string, label: string)
+   check.equal(fake.headers(endpoint)["x-kinetix-origin"], origin, label .. ": identity is told the face")
+end
+
+local FORGED_FACE: {string: string} = { ["X-Kinetix-Origin"] = "https://evil.example" }
+
+local function tunnel_origin(): string
+   return "https://" .. scenario.tunnel_host
+end
+
+local function on_tunnel(path: string, cookie: string, body: string): Answer
+   return client.edge(
+      "POST",
+      path,
+      { app = "backoffice", host = scenario.tunnel_host, origin = tunnel_origin(), cookie = cookie, body = body }
+   )
+end
+
 describe("passkey sign-in", function()
    before_each(function()
       fake.reset()
@@ -112,6 +131,7 @@ describe("passkey sign-in", function()
       local without = flows.login("backoffice", "admin-2fa@example.test", nil)
       check.equal(names(without.json), "mfaRequired,passkeys", "two keys")
       check.equal(client.flag(without, "passkeys"), false, "no passkey enrolled")
+      face_heard("login", scenario.origin("backoffice"), "login")
    end)
 
    it("answers passkeys false on the backoffice when identity says nothing about them", function()
@@ -132,6 +152,71 @@ describe("passkey sign-in", function()
       check.equal(plain.body, "{\"mfaRequired\":true}", "no passkeys key without a passkey either")
    end)
 
+   it("names the face the browser is on to identity, never an origin the browser sent", function()
+      local same_origin: EdgeRequest = {
+         app = "backoffice",
+         omit_origin = true,
+         fetch_site = "same-origin",
+         headers = FORGED_FACE,
+      }
+
+      same_origin.body = client.json({ email = "admin-passkey@example.test", password = scenario.password })
+      local login = client.edge("POST", "/bff/login", same_origin)
+      check.equal(login.status, 200, "signed in without an Origin, same-origin")
+      face_heard("login", scenario.origin("backoffice"), "login")
+
+      same_origin.cookie = flows.pending(client.cookie_value(login, "__Host-kx_pending"))
+      same_origin.body = nil
+      check.equal(client.edge("POST", "/bff/2fa/passkey/options", same_origin).status, 200, "options")
+      face_heard("passkey_options", scenario.origin("backoffice"), "options")
+
+      same_origin.body = credential_body(passkey_fixture.credential_id)
+      check.equal(client.edge("POST", "/bff/2fa/passkey/verify", same_origin).status, 200, "verify")
+      face_heard("passkey_verify", scenario.origin("backoffice"), "verify")
+   end)
+
+   it("names no face on the seller web, whatever the browser sends", function()
+      local answer = client.edge(
+         "POST",
+         "/bff/login",
+         {
+            app = "seller-web",
+            headers = FORGED_FACE,
+            body = client.json({ email = "seller-passkey@example.test", password = scenario.password }),
+         }
+      )
+      check.equal(answer.status, 200, "status")
+      check.absent(fake.headers("login")["x-kinetix-origin"], "no face for the seller web")
+   end)
+
+   it("calls identity's refusal of the face its own misconfiguration, and keeps the code", function()
+      local login = on_tunnel(
+         "/bff/login",
+         nil,
+         client.json({ email = "admin-passkey@example.test", password = scenario.password })
+      )
+      check.equal(login.status, 200, "signed in on a face identity does not know")
+      face_heard("login", tunnel_origin(), "login")
+
+      local pending = client.cookie_value(login, "__Host-kx_pending")
+      local asked = on_tunnel("/bff/2fa/passkey/options", flows.pending(pending), nil)
+      refused(asked, 502, "IDENTITY_FAILED", "options")
+      pending_kept(asked, "options")
+      check.equal(fake.count("passkey_options"), 1, "identity was asked")
+
+      local answer = on_tunnel(
+         "/bff/2fa/passkey/verify",
+         flows.pending(pending),
+         credential_body(passkey_fixture.credential_id)
+      )
+      refused(answer, 502, "IDENTITY_FAILED", "verify")
+      pending_kept(answer, "verify")
+
+      local code = on_tunnel("/bff/2fa/verify", flows.pending(pending), client.json({ code = scenario.code }))
+      check.equal(code.status, 200, "the code still answers the challenge")
+      check.absent(fake.headers("verify")["x-kinetix-origin"], "the code names no face")
+   end)
+
    it("hands the browser identity's request options unchanged and keeps the pending sign-in", function()
       local pending = pending_of("backoffice", "admin-passkey@example.test")
       local request_id = client.request_id()
@@ -144,7 +229,7 @@ describe("passkey sign-in", function()
       check.equal(names(answer.json), "options", "options only")
 
       local expected = json_relay.object(
-         json_relay.document(passkey_fixture.options(fake.issued("passkey_challenge"))),
+         json_relay.document(passkey_fixture.options(fake.issued("passkey_challenge"), passkey_fixture.lab_rp_id)),
          "options"
       )
       local relayed = json_relay.object(json_relay.document(answer.body), "options")
@@ -160,6 +245,7 @@ describe("passkey sign-in", function()
       check.equal(headers["x-kinetix-client"], "backoffice", "client name")
       check.equal(headers["x-forwarded-for"], scenario.browser_address, "the browser's address alone")
       check.equal(headers["x-request-id"], request_id, "request id")
+      face_heard("passkey_options", scenario.origin("backoffice"), "options")
    end)
 
    it("starts the session from a passkey exactly as from a code", function()
@@ -198,6 +284,7 @@ describe("passkey sign-in", function()
       )
       check.contains(fake.body("passkey_verify"), "\"clientExtensionResults\":{}", "an empty object stays an object")
       check.equal(fake.headers("passkey_verify")["x-kinetix-client"], "backoffice", "client name")
+      face_heard("passkey_verify", scenario.origin("backoffice"), "verify")
 
       local current = client.edge("GET", "/bff/session", { app = "backoffice", cookie = flows.session(session) })
       check.equal(client.flag(current, "authenticated"), true, "the session is usable")
@@ -442,6 +529,7 @@ describe("passkey management through the API forwarder", function()
       check.equal(headers["authorization"], "Bearer " .. fake.issued("access"), label .. ": the session's bearer")
       check.equal(headers["x-kinetix-client"], "backoffice", label .. ": client name")
       check.equal(headers["x-forwarded-for"], scenario.browser_address, label .. ": the browser's address alone")
+      check.equal(headers["x-kinetix-origin"], scenario.origin("backoffice"), label .. ": the face")
       check.absent(headers["cookie"], label .. ": no cookie")
    end
 
@@ -452,25 +540,32 @@ describe("passkey management through the API forwarder", function()
    it("lists the account's passkeys", function()
       local answer = call("GET", "/api/v1/auth/passkeys/105", nil)
       check.equal(answer.status, 200, "status")
-      check.equal(answer.body, "{\"passkeys\":[" .. passkey_fixture.created .. "]}", "identity's answer")
+      check.equal(
+         answer.body,
+         "{\"passkeys\":[" .. passkey_fixture.view(passkey_fixture.lab_rp_id) .. "]}",
+         "identity's answer, with each passkey's credential id and relying party"
+      )
       reached_identity("/api/v1/auth/passkeys/105", "GET", "", "list")
    end)
 
-   it("asks for creation options with a state change that carries no body", function()
-      local answer = call("POST", "/api/v1/auth/passkeys/105/options", nil)
+   it("asks for creation options with the password", function()
+      local body = client.json({ password = scenario.password })
+      local answer = call("POST", "/api/v1/auth/passkeys/105/options", body)
       check.equal(answer.status, 200, "status")
-      check.equal(answer.body, passkey_fixture.creation_options, "identity's answer")
-      reached_identity("/api/v1/auth/passkeys/105/options", "POST", "", "options")
-      check.equal(fake.headers("passkeys")["content-length"], "0", "an empty body")
+      check.equal(answer.body, passkey_fixture.creation_options(passkey_fixture.lab_rp_id), "identity's answer")
+      reached_identity("/api/v1/auth/passkeys/105/options", "POST", body, "options")
+
+      local missing = call("POST", "/api/v1/auth/passkeys/105/options", nil)
+      check.equal(missing.status, 400, "identity refuses options without the password")
    end)
 
-   it("enrols a passkey with its body unchanged", function()
+   it("enrols a passkey with its body unchanged, and no password", function()
       local body = "{\"challengeId\":\"7d8e3c1a-5b2f-4a61-9c3e-2f1b0a9d8c7e\",\"name\":\"Laptop\","
-         .. "\"password\":\"" .. scenario.password .. "\",\"credential\":{\"id\":\"" .. passkey_fixture.credential_id
+         .. "\"credential\":{\"id\":\"" .. passkey_fixture.credential_id
          .. "\",\"response\":{\"transports\":[]},\"clientExtensionResults\":{}}}"
       local answer = call("POST", "/api/v1/auth/passkeys/105", body)
       check.equal(answer.status, 201, "status")
-      check.equal(answer.body, passkey_fixture.created, "identity's answer")
+      check.equal(answer.body, passkey_fixture.view(passkey_fixture.lab_rp_id), "identity's answer")
       reached_identity("/api/v1/auth/passkeys/105", "POST", body, "enrol")
       check.equal(fake.headers("passkeys")["content-type"], "application/json", "content type")
    end)
@@ -484,6 +579,62 @@ describe("passkey management through the API forwarder", function()
       reached_identity(path, "DELETE", body, "remove")
       check.equal(fake.headers("passkeys")["content-type"], "application/json", "content type")
       check.equal(fake.headers("passkeys")["content-length"], string.format("%d", #body), "length")
+   end)
+
+   it("names each face to identity, never the browser's header", function()
+      local onion = client.edge(
+         "GET",
+         "/bff/api/v1/auth/passkeys/105",
+         { app = "backoffice", host = scenario.onion_host, cookie = cookie, headers = FORGED_FACE }
+      )
+      check.equal(onion.status, 200, "status")
+      face_heard("passkeys", "http://" .. scenario.onion_host, "the onion")
+
+      local lab = call("POST", "/api/v1/auth/passkeys/105/options", client.json({ password = scenario.password }))
+      check.contains(lab.body, "\"id\":\"" .. passkey_fixture.lab_rp_id .. "\"", "the lab face's relying party")
+
+      local answer = client.edge(
+         "POST",
+         "/bff/api/v1/auth/passkeys/105/options",
+         {
+            app = "backoffice",
+            host = scenario.onion_host,
+            origin = "http://" .. scenario.onion_host,
+            cookie = cookie,
+            headers = FORGED_FACE,
+            body = client.json({ password = scenario.password }),
+         }
+      )
+      check.contains(answer.body, "\"id\":\"" .. scenario.onion_host .. "\"", "the onion's relying party")
+   end)
+
+   it("relays identity's refusal of a face it does not know", function()
+      local answer = client.edge(
+         "GET",
+         "/bff/api/v1/auth/passkeys/105",
+         { app = "backoffice", host = scenario.tunnel_host, cookie = cookie }
+      )
+      refused(answer, 400, "ORIGIN_UNKNOWN", "the tunnel's address")
+      face_heard("passkeys", tunnel_origin(), "the tunnel")
+   end)
+
+   it("names no face where identity does not need one, nor on the seller web", function()
+      local me = client.edge(
+         "GET",
+         "/bff/api/v1/auth/me",
+         { app = "backoffice", cookie = cookie, headers = FORGED_FACE }
+      )
+      check.equal(me.status, 200, "me")
+      check.absent(fake.headers("me")["x-kinetix-origin"], "no face for /auth/me")
+
+      local seller = flows.session(flows.session_cookie("seller-web", "seller@example.test"))
+      local listed = client.edge(
+         "GET",
+         "/bff/api/v1/auth/passkeys/101",
+         { app = "seller-web", cookie = seller, headers = FORGED_FACE }
+      )
+      check.equal(listed.status, 200, "the seller web's call reaches identity")
+      check.absent(fake.headers("passkeys")["x-kinetix-origin"], "no face for the seller web")
    end)
 
    it("never forwards identity's passkey sign-in, which issues tokens", function()

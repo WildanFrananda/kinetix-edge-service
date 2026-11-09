@@ -28,7 +28,8 @@ function forward_headers.upstream(
    browser: {string: http.HeaderValue},
    context: RequestContext,
    access_token: string,
-   client: string
+   client: string,
+   face: string
 ): {string: string}
    local headers: {string: string} = {}
    for _, name in ipairs(forwarding.request_headers) do
@@ -43,6 +44,10 @@ function forward_headers.upstream(
    headers["x-forwarded-for"] = context.client_address
    if client ~= nil then
       headers["x-kinetix-client"] = client
+   end
+
+   if face ~= nil then
+      headers["x-kinetix-origin"] = face
    end
 
    return headers

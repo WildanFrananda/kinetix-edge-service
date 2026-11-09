@@ -24,6 +24,7 @@ describe("forward_headers", function()
          },
          REQUEST,
          "access-1",
+         nil,
          nil
       )
       check.equal(upstream["authorization"], "Bearer access-1", "bearer")
@@ -39,8 +40,23 @@ describe("forward_headers", function()
 
    it("names the application to identity only when the call goes to identity", function()
       local browser = { ["x-kinetix-client"] = "courier-app" }
-      local upstream = forward_headers.upstream(browser, REQUEST, "access-1", "seller-web")
+      local upstream = forward_headers.upstream(browser, REQUEST, "access-1", "seller-web", nil)
       check.equal(upstream["x-kinetix-client"], "seller-web", "the edge's own client name, not the browser's")
+   end)
+
+   it("names the face to identity only when the forwarder gives one, never the browser's", function()
+      local browser = { ["x-kinetix-origin"] = "https://evil.example" }
+      local named = forward_headers.upstream(
+         browser,
+         REQUEST,
+         "access-1",
+         "backoffice",
+         "https://backoffice.localhost:8443"
+      )
+      check.equal(named["x-kinetix-origin"], "https://backoffice.localhost:8443", "the face the edge matched")
+
+      local unnamed = forward_headers.upstream(browser, REQUEST, "access-1", "backoffice", nil)
+      check.absent(unnamed["x-kinetix-origin"], "the browser's own header stays behind")
    end)
 
    it("drops cookies, hop-by-hop and cache headers from the answer", function()

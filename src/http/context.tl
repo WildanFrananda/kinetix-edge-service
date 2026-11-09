@@ -41,6 +41,14 @@ function context.app_for(host: string): AppPolicy
    return nil
 end
 
+function context.face_origin(request: RequestContext): string
+   if request.app.passkeys then
+      return request.app.origin
+   end
+
+   return nil
+end
+
 function context.request_id(headers: {string: http.HeaderValue}): string
    local incoming = request_id.accepted(context.single(headers, "x-request-id"))
    if incoming ~= nil then
