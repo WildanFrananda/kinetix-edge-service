@@ -1,5 +1,6 @@
 local cjson = require("cjson.safe")
 local passkey_fixture = require("tests.integration.fakes.passkey_fixture")
+local scenario = require("tests.support.scenario")
 local type FakeSettings = require("tests.integration.fakes.types.fake_settings")
 local type FakeToken = require("tests.integration.fakes.types.fake_token")
 local type FakeUser = require("tests.integration.fakes.types.fake_user")
@@ -42,6 +43,7 @@ local function seed()
       verify_codes = "on",
       passkeys_flag = "on",
       passkey_mode = "ok",
+      known_origins = { scenario.origin("backoffice"), "http://" .. scenario.onion_host },
       access_expires_in = 900,
       roles = {},
    }
@@ -319,11 +321,32 @@ local function passkey_unavailable(): boolean
    return client_refused()
 end
 
+local function face_rp_id(): string
+   local origin = ngx.var.http_x_kinetix_origin
+   if origin == nil then
+      return passkey_fixture.lab_rp_id
+   end
+
+   for _, known in ipairs(settings.known_origins) do
+      if origin == known then
+         return (string.gsub(string.gsub(origin, "^https?://", ""), ":%d+$", ""))
+      end
+   end
+
+   refuse(400, "ORIGIN_UNKNOWN", "X-Kinetix-Origin names no origin this service's passkeys belong to.")
+   return nil
+end
+
 local function passkey_options()
    count("passkey_options")
    remember("passkey_options")
 
    if passkey_unavailable() then
+      return
+   end
+
+   local rp_id = face_rp_id()
+   if rp_id == nil then
       return
    end
 
@@ -350,14 +373,14 @@ local function passkey_options()
    sequence = sequence + 1
    token.passkey_challenge = "fake-passkey-challenge-" .. string.format("%d", sequence)
    issued["passkey_challenge"] = token.passkey_challenge
-   raw(200, passkey_fixture.options(token.passkey_challenge))
+   raw(200, passkey_fixture.options(token.passkey_challenge, rp_id))
 end
 
 local function passkey_verify()
    count("passkey_verify")
    remember("passkey_verify")
 
-   if passkey_unavailable() then
+   if passkey_unavailable() or face_rp_id() == nil then
       return
    end
 
@@ -624,6 +647,28 @@ local function me()
    )
 end
 
+local function validation_refused(problem: string)
+   answer(
+      400,
+      { statusCode = 400, message = { problem }, error = "Bad Request", traceId = ngx.var.http_x_request_id or "-" }
+   )
+end
+
+local function password_confirmed(document: cjson.Document, user: FakeUser): boolean
+   local password = text(document, "password")
+   if password == nil or password == "" then
+      validation_refused("password is required")
+      return false
+   end
+
+   if password ~= user.password then
+      refuse(401, "Unauthorized", "Invalid email or password credentials")
+      return false
+   end
+
+   return true
+end
+
 local function passkeys()
    count("passkeys")
    remember("passkeys")
@@ -633,21 +678,39 @@ local function passkeys()
       return refuse(401, "Unauthorized", "A Bearer token is required")
    end
 
+   local rp_id = face_rp_id()
+   if rp_id == nil then
+      return
+   end
+
+   local user = users[access.email]
+   local document = body()
    local method = ngx.req.get_method()
    if method == "DELETE" then
-      ngx.status = 204
+      if password_confirmed(document, user) then
+         ngx.status = 204
+      end
+
       return
    end
 
    if method == "GET" then
-      return raw(200, "{\"passkeys\":[" .. passkey_fixture.created .. "]}")
+      return raw(200, "{\"passkeys\":[" .. passkey_fixture.view(passkey_fixture.lab_rp_id) .. "]}")
    end
 
    if string.match(ngx.var.uri, "/options$") ~= nil then
-      return raw(200, passkey_fixture.creation_options)
+      if password_confirmed(document, user) then
+         raw(200, passkey_fixture.creation_options(rp_id))
+      end
+
+      return
    end
 
-   raw(201, passkey_fixture.created)
+   if document["password"] ~= nil then
+      return validation_refused("property password should not exist")
+   end
+
+   raw(201, passkey_fixture.view(rp_id))
 end
 
 local function couriers()

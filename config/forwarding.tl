@@ -4,6 +4,7 @@ local record forwarding
    dropped_response_headers: {string}
    refused_paths: {string}
    identity_paths: {string}
+   face_paths: {string}
 end
 
 forwarding.methods = { "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE" }
@@ -48,5 +49,7 @@ forwarding.refused_paths = {
 }
 
 forwarding.identity_paths = { "/api/v1/auth", "/api/v1/couriers" }
+
+forwarding.face_paths = { "/api/v1/auth/passkeys" }
 
 return forwarding

@@ -1,4 +1,5 @@
 local api_path = require("http.api_path")
+local context = require("http.context")
 local forward_headers = require("http.forward_headers")
 local http_client = require("adapters.http_client")
 local json_body = require("http.json_body")
@@ -37,10 +38,15 @@ local function relay(request: RequestContext, path: string, session: Session)
    local base = environment.api_upstream
    local dependency = "api"
    local client: string = nil
+   local face: string = nil
    if api_path.is_identity(path) then
       base = environment.identity_url
       dependency = "identity"
       client = request.app.client
+
+      if api_path.needs_face(path) then
+         face = context.face_origin(request)
+      end
    end
 
    local query = ngx.var.args
@@ -54,7 +60,7 @@ local function relay(request: RequestContext, path: string, session: Session)
       {
          method = request.method,
          body = body,
-         headers = forward_headers.upstream(request.headers, request, session.access_token, client),
+         headers = forward_headers.upstream(request.headers, request, session.access_token, client, face),
       },
       TIMEOUTS
    )

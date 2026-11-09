@@ -58,7 +58,10 @@ reached it keeps matching's status and empty body.
 Only the seller web offers sign-up and the merchant socket (to `seller` sessions); on the backoffice host both are
 `404 NOT_FOUND`. Only the backoffice offers passkey sign-in; on the seller web both passkey routes are `404 NOT_FOUND`
 and its challenge answer stays `{ mfaRequired: true }`. Passkey management (`/bff/api/v1/auth/passkeys/...`) is an
-ordinary API call to identity, `DELETE` with its body included.
+ordinary API call to identity, `DELETE` with its body included. A passkey belongs to the face it was made on, so on the
+backoffice the edge tells identity the face in `X-Kinetix-Origin` (the face's configured origin, never a browser's
+header) at sign-in, on both passkey routes and on passkey management; identity's `ORIGIN_UNKNOWN` is `502
+IDENTITY_FAILED` at sign-in, the pending sign-in kept for the code.
 
 The policy is code: `config/apps.tl`, `config/lifetimes.tl`, `config/timing.tl`, `config/forwarding.tl`.
 
