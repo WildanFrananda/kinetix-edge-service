@@ -1,4 +1,5 @@
 local context = require("http.context")
+local host_aliases = require("adapters.host_aliases")
 local logger = require("adapters.logger")
 local metrics = require("adapters.metrics")
 local redis_store = require("adapters.redis_store")
@@ -74,7 +75,8 @@ function merchant_socket.serve(request: RequestContext)
       return respond.error("SELLER_REQUIRED", request.request_id, nil)
    end
 
-   ngx.var.edge_socket_upstream = upstream_url()
+   local resolved_url = host_aliases.resolve_url(upstream_url(), settings.current.host_aliases)
+   ngx.var.edge_socket_upstream = resolved_url
    ngx.var.edge_socket_host = socket_handshake.upstream_host(settings.current.environment.api_upstream)
    ngx.var.edge_socket_protocol = socket_handshake.protocols_for(session.access_token)
    ngx.var.edge_client_address = request.client_address

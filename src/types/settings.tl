@@ -4,6 +4,7 @@ local type Environment = require("types.environment")
 local record Settings
    environment: Environment
    apps: {AppPolicy}
+   host_aliases: {string: string}
 end
 
 return Settings

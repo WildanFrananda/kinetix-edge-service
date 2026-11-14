@@ -194,6 +194,15 @@ moves them onto the list.
 Everything else goes to the gateway's internal listener, where the twin appends the edge's address, so a per-address
 limit in another service sees the edge.
 
+## Upstream host aliases (`/etc/hosts`)
+
+Nginx's `resolver local=on` (`127.0.0.11` in Docker Compose) does not consult `/etc/hosts`, so `extra_hosts` entries
+such as a cluster-served gateway (`kinetix-api-gateway -> 10.43.x.x`) fail DNS with `SERVFAIL` under `lua-resty-http`
+and dynamic `proxy_pass`. At start-up `adapters/host_aliases` parses IPv4 entries from `/etc/hosts` once into
+`settings.current.host_aliases`; both `adapters/http_client` and `http/merchant_socket` substitute the resolved IPv4
+address for the TCP connection while keeping the original `Host` authority (`kinetix-api-gateway:8000`) so the gateway's
+internal listener still matches its host rule.
+
 ## What is forwarded
 
 Request headers are a list (`config/forwarding.tl`); everything else stays behind, `Cookie`, `Authorization` and every

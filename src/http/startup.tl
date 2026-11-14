@@ -1,6 +1,7 @@
 local apps = require("config.apps")
 local cjson = require("cjson.safe")
 local environment = require("adapters.environment")
+local host_aliases = require("adapters.host_aliases")
 local logger = require("adapters.logger")
 local metrics = require("adapters.metrics")
 local settings = require("http.settings")
@@ -15,7 +16,11 @@ function startup.run()
    end
 
    cjson.encode_escape_forward_slash(false)
-   settings.current = { environment = read, apps = apps.policies(read) }
+   settings.current = {
+      environment = read,
+      apps = apps.policies(read),
+      host_aliases = host_aliases.read("/etc/hosts"),
+   }
    metrics.prepublish()
    logger.info(
       "configured",
