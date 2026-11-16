@@ -8,7 +8,22 @@ local record redis_store
    commands: {string}
 end
 
-redis_store.commands = { "AUTH", "PING", "GET", "SET", "DEL", "HSET", "HGETALL", "PEXPIRE", "MULTI", "EXEC" }
+redis_store.commands = {
+   "AUTH",
+   "PING",
+   "GET",
+   "SET",
+   "DEL",
+   "HSET",
+   "HGETALL",
+   "PEXPIRE",
+   "MULTI",
+   "EXEC",
+   "SUBSCRIBE",
+   "PSUBSCRIBE",
+   "UNSUBSCRIBE",
+   "PUNSUBSCRIBE",
+}
 
 local function pool_of(environment: Environment): string
    return "edge:" .. environment.redis_user .. "@" .. environment.redis_host .. ":" .. tostring(environment.redis_port)
@@ -163,6 +178,28 @@ function redis_store.read(client: redis.Client, key: string): string, string
    end
 
    return nil, nil
+end
+
+function redis_store.open_subscriber(environment: Environment, read_timeout_ms: integer): redis.Client, string
+   local client, failure = redis.new()
+   if client == nil then
+      return nil, failure
+   end
+
+   client:set_timeouts(timing.redis_timeout_ms, timing.redis_timeout_ms, read_timeout_ms)
+
+   local connected, refused = client:connect(environment.redis_host, environment.redis_port, nil)
+   if connected == nil then
+      return nil, refused
+   end
+
+   local authed, denied = client:auth(environment.redis_user, environment.redis_password)
+   if authed == nil then
+      client:close()
+      return nil, denied
+   end
+
+   return client, nil
 end
 
 return redis_store

@@ -45,6 +45,7 @@ function redis_admin.edge_rule(refused: string): {string}
       ">" .. redis_admin.edge_password,
       "~edge:*",
       "resetchannels",
+      "&matching:position:*",
       "-@all",
    }
    for _, command in ipairs(redis_store.commands) do
@@ -115,6 +116,12 @@ end
 function redis_admin.flush()
    local connection = redis_admin.admin()
    connection:flushall()
+   connection:close()
+end
+
+function redis_admin.publish(channel: string, payload: string)
+   local connection = redis_admin.admin()
+   connection:publish(channel, payload)
    connection:close()
 end
 

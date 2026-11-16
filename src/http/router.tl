@@ -1,5 +1,6 @@
 local context = require("http.context")
 local csrf = require("http.csrf")
+local event_socket = require("http.event_socket")
 local forward = require("http.forward")
 local forwarding = require("config.forwarding")
 local health = require("http.health")
@@ -141,6 +142,22 @@ router.routes = {
       for_app = true,
       offered = offers_merchant_socket,
       handler = merchant_socket.serve,
+   },
+   {
+      path = "/bff/ws/v1/events",
+      prefix = false,
+      name = "/bff/ws/v1/events",
+      methods = { "GET" },
+      for_app = true,
+      handler = event_socket.serve_bff,
+   },
+   {
+      path = "/ws/v1/events",
+      prefix = false,
+      name = "/ws/v1/events",
+      methods = { "GET" },
+      for_app = false,
+      handler = event_socket.serve_bearer,
    },
    {
       path = "/bff/api",

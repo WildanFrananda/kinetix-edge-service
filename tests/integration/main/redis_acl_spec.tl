@@ -38,7 +38,28 @@ describe("the edge's Redis user", function()
       local _, ttl = connection:pttl("edge:probe")
       check.matches(ttl, "^NOPERM", "PTTL, which the edge does not use")
 
+      local _, pub = connection:publish("matching:position:ORD-1", "{}")
+      check.matches(pub, "^NOPERM", "PUBLISH is refused for edge")
+
+      local _, other_chan = connection:subscribe("other:channel:1")
+      check.matches(other_chan, "^NOPERM", "channels outside matching:position:*")
+
       connection:close()
+   end)
+
+   it("may subscribe to matching:position:* channels and receive position broadcasts", function()
+      local subscriber = redis_admin.as_edge()
+      local subscribed, sub_err = subscriber:subscribe("matching:position:ORD-ACL-1")
+      check.truthy(subscribed ~= nil, "SUBSCRIBE matching:position:* allowed")
+      check.absent(sub_err, "no subscribe error")
+
+      redis_admin.publish("matching:position:ORD-ACL-1", "{\"latitude\":-6.2}")
+      local reply, read_err = subscriber:read_reply()
+      check.absent(read_err, "no read error")
+      check.truthy(reply ~= nil and reply[1] == "message", "received pubsub message")
+      check.equal(reply[2], "matching:position:ORD-ACL-1", "expected channel")
+      check.equal(reply[3], "{\"latitude\":-6.2}", "expected payload")
+      subscriber:close()
    end)
 
    it("gives every key the edge writes a TTL", function()

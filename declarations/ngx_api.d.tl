@@ -53,6 +53,7 @@ local record Ngx
 
    now: function(): number
    time: function(): integer
+   utctime: function(): string
    update_time: function()
    sleep: function(number)
    log: function(integer, ...: string)
