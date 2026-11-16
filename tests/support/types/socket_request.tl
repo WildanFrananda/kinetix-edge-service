@@ -4,6 +4,7 @@ local record SocketRequest
    origin: string
    protocols: {string}
    request_id: string
+   headers: {string: string}
 end
 
 return SocketRequest

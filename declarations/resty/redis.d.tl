@@ -28,6 +28,12 @@ local record redis
       keys: function(Client, string): {string}, string
       flushall: function(Client): Reply, string
       acl: function(Client, ...: string): Reply, string
+      subscribe: function(Client, string): Replies, string
+      unsubscribe: function(Client, string): Replies, string
+      psubscribe: function(Client, string): Replies, string
+      punsubscribe: function(Client, string): Replies, string
+      publish: function(Client, string, string): Reply, string
+      read_reply: function(Client): Replies, string
    end
 
    new: function(): Client, string

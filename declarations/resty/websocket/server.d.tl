@@ -5,8 +5,10 @@ local record server
    end
 
    record Connection
+      set_timeout: function(Connection, integer)
       recv_frame: function(Connection): string, string, string
       send_text: function(Connection, string): integer, string
+      send_pong: function(Connection, string): integer, string
       send_close: function(Connection): integer, string
    end
 

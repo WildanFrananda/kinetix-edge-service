@@ -40,6 +40,9 @@ function socket.open(path: string, request: SocketRequest): OpenedSocket
    if options.cookie ~= nil then
       table.insert(headers, "Cookie: " .. options.cookie)
    end
+   for name, value in pairs(options.headers or {}) do
+      table.insert(headers, name .. ": " .. value)
+   end
 
    local opened, refused, header = connection:connect(
       scenario.socket_url .. path,
