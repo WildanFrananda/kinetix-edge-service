@@ -500,5 +500,40 @@ describe("public API proxy, security headers, early checks, and metrics", functi
          end
       end
       check.truthy(found_email_key, "hashed email zset key exists")
+
+      for attempt = 1, 30 do
+         local rotating_tok = bearer_with("prn_rot_" .. tostring(attempt), "customer", "access", "kinetix")
+         local res = client.edge(
+            "POST",
+            "/api/v1/orders/checkout",
+            {
+               host = "api.localhost:8443",
+               omit_origin = true,
+               forwarded_for = "198.51.100.200",
+               headers = {
+                  ["Authorization"] = "Bearer " .. rotating_tok,
+                  ["Idempotency-Key"] = "idem-rot-" .. tostring(attempt),
+               },
+               body = '{"addressId":1}',
+            }
+         )
+         check.equal(res.status, 200, "checkout " .. tostring(attempt) .. " within source IP cap")
+      end
+
+      local capped = client.edge(
+         "POST",
+         "/api/v1/orders/checkout",
+         {
+            host = "api.localhost:8443",
+            omit_origin = true,
+            forwarded_for = "198.51.100.200",
+            headers = {
+               ["Authorization"] = "Bearer " .. bearer_with("prn_rot_31", "customer", "access", "kinetix"),
+               ["Idempotency-Key"] = "idem-rot-31",
+            },
+            body = '{"addressId":1}',
+         }
+      )
+      check.equal(capped.status, 429, "source IP cap stops rotating sub values on checkout")
    end)
 end)

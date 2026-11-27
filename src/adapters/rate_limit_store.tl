@@ -7,12 +7,12 @@ local type Environment = require("types.environment")
 local record rate_limit_store
 end
 
-local function extract_count(replies: redis.Replies): integer
-   if replies == nil or #replies < 4 then
+local function reply_integer(reply: redis.Reply): integer
+   if reply == nil then
       return nil
    end
 
-   local raw = tostring(replies[3])
+   local raw = tostring(reply)
    if string.match(raw, "^%d+$") == nil then
       return nil
    end
@@ -25,19 +25,27 @@ local function extract_count(replies: redis.Replies): integer
    return math.floor(parsed)
 end
 
-function rate_limit_store.consume(
-   environment: Environment,
+local function extract_count(replies: redis.Replies): integer
+   if replies == nil or #replies < 4 then
+      return nil
+   end
+
+   for index = 1, 4 do
+      if reply_integer(replies[index]) == nil then
+         return nil
+      end
+   end
+
+   return reply_integer(replies[3])
+end
+
+function rate_limit_store.consume_client(
+   client: redis.Client,
    key: string,
    max_requests: integer,
    window_ms: integer,
    now_ms: integer
 ): boolean, boolean, integer
-   local client = redis_store.open(environment)
-   if client == nil then
-      metrics.dependency_failed("redis")
-      return false, true, 0
-   end
-
    local unique = secure_random.hex(6)
    if unique == nil then
       redis_store.discard(client)
@@ -70,6 +78,22 @@ function rate_limit_store.consume(
 
    redis_store.release(client)
    return count <= max_requests, false, count
+end
+
+function rate_limit_store.consume(
+   environment: Environment,
+   key: string,
+   max_requests: integer,
+   window_ms: integer,
+   now_ms: integer
+): boolean, boolean, integer
+   local client = redis_store.open(environment)
+   if client == nil then
+      metrics.dependency_failed("redis")
+      return false, true, 0
+   end
+
+   return rate_limit_store.consume_client(client, key, max_requests, window_ms, now_ms)
 end
 
 return rate_limit_store

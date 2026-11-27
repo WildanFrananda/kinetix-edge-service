@@ -58,6 +58,16 @@ describe("principal", function()
       check.falsy(missing.ok, "missing bearer refused")
       check.equal(missing.error_code, "TOKEN_REQUIRED", "missing token -> 401")
 
+      local missing_sub = jwt_with_claims({ role = "customer", token_use = "access", aud = "kinetix" })
+      local no_sub = principal.authorize(principal.inspect("Bearer " .. missing_sub, "kinetix"), BUYER_RULE)
+      check.falsy(no_sub.ok, "missing sub refused")
+      check.equal(no_sub.error_code, "TOKEN_REQUIRED", "missing sub -> 401")
+
+      local empty_sub = jwt_with_claims({ sub = "", role = "customer", token_use = "access", aud = "kinetix" })
+      local blank_sub = principal.authorize(principal.inspect("Bearer " .. empty_sub, "kinetix"), BUYER_RULE)
+      check.falsy(blank_sub.ok, "empty sub refused")
+      check.equal(blank_sub.error_code, "TOKEN_REQUIRED", "empty sub -> 401")
+
       local refresh = jwt_with_claims({ sub = "prn_1", role = "customer", token_use = "refresh", aud = "kinetix" })
       local bad_use = principal.authorize(principal.inspect("Bearer " .. refresh, "kinetix"), BUYER_RULE)
       check.falsy(bad_use.ok, "refresh token refused")

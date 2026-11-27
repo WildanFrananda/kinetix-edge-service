@@ -1,6 +1,8 @@
 local check = require("tests.support.check")
 local digest = require("adapters.digest")
+local rate_limit_store = require("adapters.rate_limit_store")
 local rate_limiter = require("http.rate_limiter")
+local redis = require("resty.redis")
 local type ApiRouteRule = require("types.api_route_rule")
 local type Environment = require("types.environment")
 local type PrincipalClaims = require("types.principal_claims")
@@ -94,13 +96,19 @@ describe("rate_limiter", function()
       seen = {}
       local checkout_res = rate_limiter.evaluate_with(allow, 1000, ENV, CHECKOUT_RULE, REQUEST, CLAIMS, "{}")
       check.truthy(checkout_res.ok, "checkout allowed")
-      check.equal(#seen, 1, "principal bucket checked")
+      check.equal(#seen, 2, "both source IP and principal buckets checked")
       check.equal(
          seen[1],
+         "edge:rl:checkout_ip:ip:" .. digest.sha256_hex("198.51.100.77"),
+         "hashed checkout ip key"
+      )
+      check.equal(
+         seen[2],
          "edge:rl:checkout_principal:sub:" .. digest.sha256_hex("prn_buyer_42"),
          "hashed sub key"
       )
-      check.excludes(seen[1], "prn_buyer_42", "no raw sub in key")
+      check.excludes(seen[1], "198.51.100.77", "no raw ip in checkout key")
+      check.excludes(seen[2], "prn_buyer_42", "no raw sub in key")
    end)
 
    it("refuses with 429 Retry-After when over limit and fails closed when Redis is unavailable", function()
@@ -131,5 +139,56 @@ describe("rate_limiter", function()
       check.falsy(down.ok, "store failure refused")
       check.truthy(down.unavailable, "marked unavailable")
       check.equal(down.error_code, "SESSION_STORE_UNAVAILABLE", "503 fail-closed")
+   end)
+
+   it("fails closed when a command inside MULTI/EXEC returns an error", function()
+      local closed = false
+      local kept_alive = false
+      local fake_client = {
+         multi = function(_: redis.Client): redis.Reply, string
+            return "OK", nil
+         end,
+         zremrangebyscore = function(
+            _: redis.Client,
+            _k: string,
+            _a: string | integer,
+            _b: string | integer
+         ): redis.Reply, string
+            return "QUEUED", nil
+         end,
+         zadd = function(_: redis.Client, _k: string, _s: integer, _m: string): redis.Reply, string
+            return "QUEUED", nil
+         end,
+         zcard = function(_: redis.Client, _k: string): redis.Reply, string
+            return "QUEUED", nil
+         end,
+         pexpire = function(_: redis.Client, _k: string, _ttl: integer): redis.Reply, string
+            return "QUEUED", nil
+         end,
+         exec = function(_: redis.Client): redis.Replies, string
+            return { 0, ngx.null, 1, 1 } as redis.Replies, nil
+         end,
+         close = function(_: redis.Client): integer, string
+            closed = true
+            return 1, nil
+         end,
+         set_keepalive = function(_: redis.Client, _a: integer, _b: integer): integer, string
+            kept_alive = true
+            return 1, nil
+         end,
+      } as redis.Client
+
+      local allowed, unavailable, count = rate_limit_store.consume_client(
+         fake_client,
+         "edge:rl:test",
+         10,
+         60000,
+         1000
+      )
+      check.falsy(allowed, "failed ZADD inside EXEC refuses request")
+      check.truthy(unavailable, "marked store failure")
+      check.equal(count, 0, "count zeroed")
+      check.truthy(closed, "broken transaction client discarded")
+      check.falsy(kept_alive, "broken transaction client not pooled")
    end)
 end)

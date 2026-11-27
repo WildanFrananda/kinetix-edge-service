@@ -93,9 +93,7 @@ jobs:
         if: always()
         with:
           name: trufflehog
-          path: |
-            trufflehog.json
-            trufflehog.sarif
+          path: trufflehog.sarif
           if-no-files-found: ignore
       - uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4
         if: always() && hashFiles('trufflehog.sarif') != ''
@@ -195,9 +193,13 @@ jobs:
       - name: Scan lockfiles
         continue-on-error: true
         run: |
+          scan_status=0
           docker run --rm -v "$PWD:/src" -w /src ghcr.io/google/osv-scanner:latest \
-            scan source --recursive --format sarif --output-file osv.sarif .
-          sed -i 's#file:///src/##g' osv.sarif
+            scan source --recursive --format sarif --output-file osv.sarif . || scan_status=$?
+          if [ -f osv.sarif ]; then
+            sed -i 's#file:///src/##g' osv.sarif
+          fi
+          exit "$scan_status"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:

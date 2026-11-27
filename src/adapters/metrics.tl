@@ -78,9 +78,13 @@ metrics.rate_limit_outcomes = {
    "auth_register_ip",
    "auth_register_email",
    "auth_public_ip",
+   "checkout_ip",
    "checkout_principal",
+   "topup_ip",
    "topup_principal",
+   "api_user_ip",
    "api_user_principal",
+   "api_admin_ip",
    "api_admin_principal",
 }
 

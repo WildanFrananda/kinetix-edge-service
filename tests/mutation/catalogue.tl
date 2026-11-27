@@ -701,6 +701,33 @@ catalogue.mutations = {
       unit = { "rate_limiter" },
       integration = {},
    },
+   {
+      id = "x1-proxy-require-auth",
+      check = "protected API routes refuse requests without a valid bearer token",
+      file = "src/http/api_proxy.tl",
+      old = "   if rule.require_auth then",
+      new = "   if false and rule.require_auth then",
+      unit = {},
+      integration = { "api_proxy" },
+   },
+   {
+      id = "x1-token-subject-required",
+      check = "protected API routes refuse tokens without a non-empty sub claim",
+      file = "src/http/principal.tl",
+      old = "   if claims.sub == nil or claims.sub == \"\" then",
+      new = "   if false and (claims.sub == nil or claims.sub == \"\") then",
+      unit = { "principal" },
+      integration = {},
+   },
+   {
+      id = "x2-exec-all-replies",
+      check = "sliding-window Redis EXEC validates every command reply, not only ZCARD",
+      file = "src/adapters/rate_limit_store.tl",
+      old = "   for index = 1, 4 do",
+      new = "   for index = 3, 3 do",
+      unit = { "rate_limiter" },
+      integration = {},
+   },
 }
 
 return catalogue

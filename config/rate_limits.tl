@@ -17,15 +17,19 @@ rate_limits.groups = {
       { name = "auth_public_ip", max_requests = 20, window_ms = 60000, key_scope = "ip" },
    },
    ["checkout"] = {
+      { name = "checkout_ip", max_requests = 30, window_ms = 60000, key_scope = "ip" },
       { name = "checkout_principal", max_requests = 20, window_ms = 60000, key_scope = "principal" },
    },
    ["topup"] = {
+      { name = "topup_ip", max_requests = 20, window_ms = 60000, key_scope = "ip" },
       { name = "topup_principal", max_requests = 10, window_ms = 60000, key_scope = "principal" },
    },
    ["api_user"] = {
+      { name = "api_user_ip", max_requests = 240, window_ms = 60000, key_scope = "ip" },
       { name = "api_user_principal", max_requests = 120, window_ms = 60000, key_scope = "principal" },
    },
    ["api_admin"] = {
+      { name = "api_admin_ip", max_requests = 300, window_ms = 60000, key_scope = "ip" },
       { name = "api_admin_principal", max_requests = 180, window_ms = 60000, key_scope = "principal" },
    },
 }
