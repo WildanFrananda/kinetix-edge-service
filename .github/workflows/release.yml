@@ -16,11 +16,13 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   promote:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       # Full history: the ancestry check below needs it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

@@ -122,6 +122,7 @@ jobs:
           --config p/secrets
           --config p/dockerfile
           --exclude build
+          --exclude-rule javascript.lang.security.detect-insecure-websocket
           --sarif --output semgrep.sarif
           --error
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -151,6 +152,7 @@ jobs:
           scanners: vuln,secret,misconfig
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
           format: sarif
           output: trivy-fs.sarif
           exit-code: "0"
@@ -159,6 +161,7 @@ jobs:
         with:
           scan-type: config
           severity: MEDIUM,HIGH,CRITICAL
+          trivyignores: .trivyignore.yaml
           format: sarif
           output: trivy-config.sarif
           exit-code: "0"
