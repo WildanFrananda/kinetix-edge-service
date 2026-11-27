@@ -25,7 +25,7 @@ On port `8080`, plain HTTP on the Docker network. The gateway sends only `/bff/.
 | `GET` | `/bff/ws/v1/matching/merchant`, `/bff/ws/v1/matching/merchant/websocket` | seller web only: a WebSocket upgrade from the app's own `Origin` with a `seller` session, proxied (query included) to matching's merchant socket through `${EDGE_API_UPSTREAM}`; the access token travels upstream in the `Sec-WebSocket-Protocol` entry `base64url.bearer.phx.<token>` and never back; the browser is answered `phoenix` only if it offered it |
 | `GET` | `/bff/ws/v1/events`, `/ws/v1/events` | unified `camelCase` JSON event WebSocket (X21) for buyers, sellers, and couriers; Redis `matching:position:*` latest-wins relay and matching upstream bridge |
 | any of `GET HEAD POST PUT PATCH DELETE` | `/bff/api/<path>` | forwarded to `${EDGE_API_UPSTREAM}/api/<path>` with the session's bearer; identity's throttled routes (`/api/v1/auth`, `/api/v1/couriers`) go to `${IDENTITY_HTTP_URL}` directly |
-| any of `GET HEAD POST PUT PATCH DELETE` | `/api/v1/{auth,couriers,orders,cart,payment}...` | selective public API proxy (X15 security headers, X16 body/JSON/`Idempotency-Key` early checks, X18 principal-class metrics, X19 `X-Kinetix-*` hint sanitization) |
+| any of `GET HEAD POST PUT PATCH DELETE` | `/api/v1/{auth,couriers,orders,cart,payment}...` | selective public API proxy (X1 token claims/roles, X2 Redis sliding-window rate limits, X5 Midtrans IP allowlist, X6 mobile version gate, X15 security headers, X16 body/JSON/`Idempotency-Key` early checks, X18 principal-class metrics, X19 `X-Kinetix-*` hint sanitization) |
 | `GET` | `/health` | the process |
 | `GET` | `/health/ready` | Redis answers `PING` as the edge user |
 
@@ -40,7 +40,8 @@ Every answer carries `Cache-Control: no-store`. Every error is `{ error, message
 | 403 | `CSRF_REFUSED`, `ROLE_REFUSED`, `SELLER_REQUIRED` (the merchant socket; the session is kept) |
 | 404, 405 | `NOT_FOUND`, `METHOD_NOT_ALLOWED` (with `Allow`) |
 | 409 | `TWO_FACTOR_ALREADY_ENABLED`, `EMAIL_TAKEN` |
-| 413, 414, 415, 431 | `PAYLOAD_TOO_LARGE`, `URI_TOO_LONG`, `JSON_REQUIRED`, `HEADERS_TOO_LARGE` |
+| 401, 403 | `TOKEN_REQUIRED`, `FORBIDDEN`, `WEBHOOK_FORBIDDEN` |
+| 413, 414, 415, 426, 431 | `PAYLOAD_TOO_LARGE`, `URI_TOO_LONG`, `JSON_REQUIRED`, `UPGRADE_REQUIRED`, `HEADERS_TOO_LARGE` |
 | 426 | `WEBSOCKET_REQUIRED` (with `Upgrade: websocket`) |
 | 429 | `SIGN_IN_DELAYED`, `TOO_MANY_REQUESTS` (identity's, with its `Retry-After`) |
 | 500, 502 | `INTERNAL_ERROR`, `IDENTITY_FAILED` |

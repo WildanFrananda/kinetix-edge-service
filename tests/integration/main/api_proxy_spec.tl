@@ -1,7 +1,9 @@
 local cjson = require("cjson.safe")
 local check = require("tests.support.check")
 local client = require("tests.support.client")
+local digest = require("adapters.digest")
 local fake = require("tests.support.fake")
+local redis_admin = require("tests.support.redis_admin")
 local scenario = require("tests.support.scenario")
 local type Answer = require("tests.support.types.answer")
 
@@ -10,11 +12,20 @@ local function encode_b64url(text: string): string
    return (string.gsub(string.gsub(encoded, "+", "-"), "/", "_"))
 end
 
-local function bearer_for(role: string): string
+local function bearer_with(sub: string, role: string, token_use: string, aud: string): string
    local header = encode_b64url('{"alg":"RS256","typ":"JWT"}')
-   local encoded_payload = cjson.encode({ sub = "prn_test_1", role = role })
+   local encoded_payload = cjson.encode({
+      sub = sub,
+      role = role,
+      token_use = token_use,
+      aud = aud,
+   })
    local payload = encode_b64url(encoded_payload)
    return header .. "." .. payload .. ".sig"
+end
+
+local function bearer_for(role: string): string
+   return bearer_with("prn_test_1", role, "access", "kinetix")
 end
 
 local function echoed_headers(answer: Answer): {string: string}
@@ -39,6 +50,7 @@ end
 describe("public API proxy, security headers, early checks, and metrics", function()
    before_each(function()
       fake.reset()
+      redis_admin.flush()
    end)
 
    it("sets security headers and strips Server and X-Powered-By on every response", function()
@@ -63,7 +75,11 @@ describe("public API proxy, security headers, early checks, and metrics", functi
       local api_answer = client.edge(
          "GET",
          "/api/v1/orders/ORD-100",
-         { host = "api.localhost:8443", omit_origin = true }
+         {
+            host = "api.localhost:8443",
+            omit_origin = true,
+            headers = { ["Authorization"] = "Bearer " .. bearer_for("customer") },
+         }
       )
       check.equal(api_answer.status, 200, "proxied API status")
       check.equal(client.header(api_answer, "X-Content-Type-Options"), "nosniff", "api nosniff")
@@ -71,12 +87,14 @@ describe("public API proxy, security headers, early checks, and metrics", functi
    end)
 
    it("enforces Idempotency-Key, JSON validity, Content-Type, and route body caps before upstream", function()
+      local customer_auth = { ["Authorization"] = "Bearer " .. bearer_for("customer") }
       local no_idem = client.edge(
          "POST",
          "/api/v1/orders/checkout",
          {
             host = "api.localhost:8443",
             omit_origin = true,
+            headers = customer_auth,
             body = '{"items":1}',
          }
       )
@@ -89,6 +107,7 @@ describe("public API proxy, security headers, early checks, and metrics", functi
          {
             host = "api.localhost:8443",
             omit_origin = true,
+            headers = customer_auth,
             body = '{"amount":10000}',
          }
       )
@@ -102,7 +121,10 @@ describe("public API proxy, security headers, early checks, and metrics", functi
             host = "api.localhost:8443",
             omit_origin = true,
             content_type = "text/plain",
-            headers = { ["Idempotency-Key"] = "idem-1" },
+            headers = {
+               ["Authorization"] = customer_auth["Authorization"],
+               ["Idempotency-Key"] = "idem-1",
+            },
             body = "hello",
          }
       )
@@ -115,7 +137,10 @@ describe("public API proxy, security headers, early checks, and metrics", functi
          {
             host = "api.localhost:8443",
             omit_origin = true,
-            headers = { ["Idempotency-Key"] = "idem-2" },
+            headers = {
+               ["Authorization"] = customer_auth["Authorization"],
+               ["Idempotency-Key"] = "idem-2",
+            },
             body = "{not-json",
          }
       )
@@ -128,7 +153,10 @@ describe("public API proxy, security headers, early checks, and metrics", functi
          {
             host = "api.localhost:8443",
             omit_origin = true,
-            headers = { ["Idempotency-Key"] = "idem-3" },
+            headers = {
+               ["Authorization"] = customer_auth["Authorization"],
+               ["Idempotency-Key"] = "idem-3",
+            },
             body = '{"pad":"' .. string.rep("x", 17000) .. '"}',
          }
       )
@@ -143,16 +171,42 @@ describe("public API proxy, security headers, early checks, and metrics", functi
       check.equal(wrong_method.status, 405, "method not allowed")
       check.equal(client.header(wrong_method, "Allow"), "POST", "allow header")
 
-      local webhook = client.edge(
+      local untrusted_webhook = client.edge(
          "POST",
          "/api/v1/payment/gateway/midtrans/notifications",
          {
             host = "api.localhost:8443",
             omit_origin = true,
+            forwarded_for = "10.0.0.2, 198.51.100.77",
             body = '{"order_id":"ORD-1"}',
          }
       )
-      check.equal(webhook.status, 200, "webhook does not require idempotency key")
+      check.equal(untrusted_webhook.status, 403, "untrusted IP refused on midtrans webhook")
+      check.equal(client.text(untrusted_webhook, "error"), "WEBHOOK_FORBIDDEN", "webhook forbidden code")
+
+      local sandbox_webhook = client.edge(
+         "POST",
+         "/api/v1/payment/gateway/midtrans/notifications",
+         {
+            host = "api.localhost:8443",
+            omit_origin = true,
+            forwarded_for = "10.0.0.2, 34.101.68.130",
+            body = '{"order_id":"ORD-1"}',
+         }
+      )
+      check.equal(sandbox_webhook.status, 200, "midtrans sandbox IP admitted without idempotency key")
+
+      local prod_webhook = client.edge(
+         "POST",
+         "/api/v1/payment/gateway/midtrans/notifications",
+         {
+            host = "api.localhost:8443",
+            omit_origin = true,
+            forwarded_for = "10.0.0.2, 103.208.23.6",
+            body = '{"order_id":"ORD-2"}',
+         }
+      )
+      check.equal(prod_webhook.status, 200, "midtrans production CIDR admitted")
    end)
 
    it("sanitizes incoming X-Kinetix-* hints, routes identity directly, and records X18 metrics", function()
@@ -239,5 +293,212 @@ describe("public API proxy, security headers, early checks, and metrics", functi
       )
       check.excludes(scrape, "ORD-100", "no raw order id in metrics")
       check.excludes(scrape, "prn_test_1", "no principal id in metrics")
+   end)
+
+   it("enforces X6 mobile app minimum versions and forwards validated version headers", function()
+      local outdated = client.edge(
+         "POST",
+         "/api/v1/auth/login",
+         {
+            host = "api.localhost:8443",
+            omit_origin = true,
+            headers = {
+               ["X-Kinetix-Client"] = "courier-app",
+               ["X-Kinetix-App-Version"] = "0.9.5",
+            },
+            body = '{"email":"courier@example.test","password":"correct-password"}',
+         }
+      )
+      check.equal(outdated.status, 426, "outdated mobile app refused")
+      check.equal(client.text(outdated, "error"), "UPGRADE_REQUIRED", "upgrade required code")
+      check.equal(client.text(outdated, "minimumVersion"), "1.0.0", "minimumVersion returned")
+      check.matches(client.text(outdated, "storeUrl"), "^https://play%.google%.com/", "storeUrl returned")
+
+      local malformed = client.edge(
+         "POST",
+         "/api/v1/auth/login",
+         {
+            host = "api.localhost:8443",
+            omit_origin = true,
+            headers = {
+               ["X-Kinetix-Client"] = "courier-app",
+               ["X-Kinetix-App-Version"] = "invalid-ver",
+            },
+            body = '{"email":"courier@example.test","password":"correct-password"}',
+         }
+      )
+      check.equal(malformed.status, 400, "malformed version refused")
+      check.equal(client.text(malformed, "error"), "INVALID_REQUEST", "malformed code")
+
+      local valid = client.edge(
+         "POST",
+         "/api/v1/auth/login",
+         {
+            host = "api.localhost:8443",
+            omit_origin = true,
+            headers = {
+               ["X-Kinetix-Client"] = "courier-app",
+               ["X-Kinetix-App-Version"] = "1.0.0",
+            },
+            body = '{"email":"seller@example.test","password":"correct-password"}',
+         }
+      )
+      check.equal(valid.status, 200, "supported app version allowed")
+      check.equal(fake.headers("login")["x-kinetix-app-version"], "1.0.0", "validated version forwarded to identity")
+   end)
+
+   it("enforces X1 token claims, audience, and per-route roles before upstream", function()
+      local no_auth = client.edge(
+         "POST",
+         "/api/v1/orders/checkout",
+         {
+            host = "api.localhost:8443",
+            omit_origin = true,
+            headers = { ["Idempotency-Key"] = "idem-auth-1" },
+            body = '{"addressId":1}',
+         }
+      )
+      check.equal(no_auth.status, 401, "missing token -> 401")
+      check.equal(client.text(no_auth, "error"), "TOKEN_REQUIRED", "token required code")
+
+      local refresh_tok = bearer_with("prn_test_1", "customer", "refresh", "kinetix")
+      local wrong_use = client.edge(
+         "POST",
+         "/api/v1/orders/checkout",
+         {
+            host = "api.localhost:8443",
+            omit_origin = true,
+            headers = {
+               ["Authorization"] = "Bearer " .. refresh_tok,
+               ["Idempotency-Key"] = "idem-auth-2",
+            },
+            body = '{"addressId":1}',
+         }
+      )
+      check.equal(wrong_use.status, 401, "refresh token rejected on API")
+      check.equal(client.text(wrong_use, "error"), "TOKEN_REQUIRED", "wrong token_use code")
+
+      local wrong_aud_tok = bearer_with("prn_test_1", "customer", "access", "other-aud")
+      local bad_aud = client.edge(
+         "POST",
+         "/api/v1/orders/checkout",
+         {
+            host = "api.localhost:8443",
+            omit_origin = true,
+            headers = {
+               ["Authorization"] = "Bearer " .. wrong_aud_tok,
+               ["Idempotency-Key"] = "idem-auth-3",
+            },
+            body = '{"addressId":1}',
+         }
+      )
+      check.equal(bad_aud.status, 401, "wrong audience rejected")
+
+      local courier_on_checkout = client.edge(
+         "POST",
+         "/api/v1/orders/checkout",
+         {
+            host = "api.localhost:8443",
+            omit_origin = true,
+            headers = {
+               ["Authorization"] = "Bearer " .. bearer_for("courier"),
+               ["Idempotency-Key"] = "idem-auth-4",
+            },
+            body = '{"addressId":1}',
+         }
+      )
+      check.equal(courier_on_checkout.status, 403, "courier forbidden on checkout")
+      check.equal(client.text(courier_on_checkout, "error"), "FORBIDDEN", "forbidden code")
+
+      local buyer_on_courier_apps = client.edge(
+         "GET",
+         "/api/v1/couriers/applications",
+         {
+            host = "api.localhost:8443",
+            omit_origin = true,
+            headers = { ["Authorization"] = "Bearer " .. bearer_for("customer") },
+         }
+      )
+      check.equal(buyer_on_courier_apps.status, 403, "customer forbidden on courier admin applications")
+
+      local buyer_on_merchant_wallet = client.edge(
+         "GET",
+         "/api/v1/payment/wallet/merchant/balance",
+         {
+            host = "api.localhost:8443",
+            omit_origin = true,
+            headers = { ["Authorization"] = "Bearer " .. bearer_for("customer") },
+         }
+      )
+      check.equal(buyer_on_merchant_wallet.status, 403, "customer forbidden on merchant wallet")
+
+      local seller_on_merchant_wallet = client.edge(
+         "GET",
+         "/api/v1/payment/wallet/merchant/balance",
+         {
+            host = "api.localhost:8443",
+            omit_origin = true,
+            headers = { ["Authorization"] = "Bearer " .. bearer_for("seller") },
+         }
+      )
+      check.equal(seller_on_merchant_wallet.status, 200, "seller allowed on merchant wallet")
+
+      local admin_search = client.edge(
+         "GET",
+         "/api/v1/orders/search",
+         {
+            host = "api.localhost:8443",
+            omit_origin = true,
+            headers = { ["Authorization"] = "Bearer " .. bearer_for("admin") },
+         }
+      )
+      check.equal(admin_search.status, 200, "admin allowed on orders search")
+   end)
+
+   it("enforces X2 Redis sliding-window rate limits and hashes keys with TTL", function()
+      for attempt = 1, 5 do
+         local ok_login = client.edge(
+            "POST",
+            "/api/v1/auth/login",
+            {
+               host = "api.localhost:8443",
+               omit_origin = true,
+               forwarded_for = "198.51.100." .. tostring(10 + attempt),
+               headers = { ["X-Kinetix-Client"] = "seller-web" },
+               body = '{"email":"seller@example.test","password":"correct-password"}',
+            }
+         )
+         check.equal(ok_login.status, 200, "login attempt " .. tostring(attempt) .. " within limit")
+      end
+
+      local blocked = client.edge(
+         "POST",
+         "/api/v1/auth/login",
+         {
+            host = "api.localhost:8443",
+            omit_origin = true,
+            forwarded_for = "198.51.100.99",
+            headers = { ["X-Kinetix-Client"] = "seller-web" },
+            body = '{"email":"Seller@Example.Test","password":"correct-password"}',
+         }
+      )
+      check.equal(blocked.status, 429, "6th login for same email limited across IPs")
+      check.equal(client.text(blocked, "error"), "TOO_MANY_REQUESTS", "rate limit error code")
+      check.present(client.header(blocked, "Retry-After"), "Retry-After header present")
+      check.equal(fake.count("login"), 5, "identity only called 5 times")
+
+      local keys = redis_admin.keys("edge:rl:*")
+      check.at_least(#keys, 2, "rate limit zset keys written")
+      local email_hash = digest.sha256_hex("seller@example.test")
+      local found_email_key = false
+      for _, key in ipairs(keys) do
+         check.excludes(key, "seller@example.test", "no raw email in redis key")
+         check.excludes(key, "198.51.100", "no raw ip in redis key")
+         check.at_least(redis_admin.pttl(key), 1, key .. " has positive TTL")
+         if key == "edge:rl:auth_login_email:email:" .. email_hash then
+            found_email_key = true
+         end
+      end
+      check.truthy(found_email_key, "hashed email zset key exists")
    end)
 end)

@@ -1,0 +1,29 @@
+language: "en-US"
+reviews:
+  profile: "assertive"
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "main"
+      - "development"
+  path_instructions:
+    - path: "src/**"
+      instructions: |
+        - Enforce CLAUDE.md and Teal strictness: zero code comments (`--`), no `any`, no `x is integer`, max 120 columns, and no trailing spaces.
+        - Every type record or enum belongs in `src/types/*.tl` (one record or enum per file), never inline inside handler or adapter modules.
+        - Flag any hardcoded fallback secrets, credentials, upstream URLs, or mock/dummy production logic; required env vars must fail fast at startup.
+        - Never put raw emails, IPs, principal IDs, cookies, passwords, or tokens into Redis key names, access logs, or Prometheus metric labels.
+        - Verify security gates (`X1` auth/roles, `X2` rate limits, `X5` webhook CIDR allowlist, `X6` app version, `X16` body/JSON/idempotency, `X19` header stripping, `X21` WebSocket auth) fail closed when required and never delegate business decisions into edge.
+    - path: "config/**"
+      instructions: |
+        - Keep route policies, role allowlists, Midtrans webhook CIDRs, rate-limit budgets, and app minimum versions strictly data-driven with zero hardcoded secrets or private infrastructure IPs.
+        - Ensure exact routes are ordered before prefix wildcards in `config/api_routes.tl` and verify public vs protected routes stay aligned with backend controllers.
+    - path: "nginx/**"
+      instructions: |
+        - Verify `X15` security response headers, hidden `Server`/`X-Powered-By` headers, strict request limits, and internal-only Redis/identity/upstream wiring.
+    - path: "tests/**"
+      instructions: |
+        - Verify hand-written fakes in `tests/integration/fakes/` are used without mocking frameworks, integration suites exercise real OpenResty + real Redis, and every security invariant has a corresponding killing mutant in `tests/mutation/catalogue.tl`.
+chat:
+  auto_reply: true

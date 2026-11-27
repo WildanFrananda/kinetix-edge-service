@@ -23,6 +23,9 @@ local record redis
       hgetall: function(Client, string): {string}, string
       pexpire: function(Client, string, integer): Reply, string
       pttl: function(Client, string): Reply, string
+      zremrangebyscore: function(Client, string, string | integer, string | integer): Reply, string
+      zadd: function(Client, string, integer, string): Reply, string
+      zcard: function(Client, string): Reply, string
       multi: function(Client): Reply, string
       exec: function(Client): Replies, string
       keys: function(Client, string): {string}, string

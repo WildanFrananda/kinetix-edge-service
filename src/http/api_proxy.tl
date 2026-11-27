@@ -1,14 +1,19 @@
+local api_auth = require("config.api_auth")
 local api_path = require("http.api_path")
 local api_routes = require("config.api_routes")
+local app_version = require("http.app_version")
 local client_address = require("http.client_address")
 local context = require("http.context")
 local early_checks = require("http.early_checks")
+local errors = require("http.errors")
 local event_protocol = require("http.event_protocol")
 local forward_headers = require("http.forward_headers")
+local ip_cidr = require("http.ip_cidr")
 local json_body = require("http.json_body")
 local logger = require("adapters.logger")
 local metrics = require("adapters.metrics")
 local principal = require("http.principal")
+local rate_limiter = require("http.rate_limiter")
 local respond = require("http.respond")
 local settings = require("http.settings")
 local upstream_relay = require("http.upstream_relay")
@@ -30,9 +35,71 @@ function api_proxy.serve(request: RequestContext)
 
    request.client_address = address
 
+   if rule.allowed_cidrs ~= nil then
+      if not ip_cidr.matches_any(address, rule.allowed_cidrs) then
+         metrics.decision("webhook", "refused")
+         logger.info(
+            "webhook_refused",
+            { route = rule.name, reason = "untrusted_source", request_id = request.request_id }
+         )
+         return respond.error("WEBHOOK_FORBIDDEN", request.request_id, nil)
+      end
+
+      metrics.decision("webhook", "allowed")
+   end
+
+   local client_header = context.single(request.headers, "x-kinetix-client")
+   local version_header = context.single(request.headers, "x-kinetix-app-version")
+   local version_check = app_version.evaluate(client_header, version_header)
+   if not version_check.ok then
+      metrics.decision("app_version", version_check.reason)
+      logger.info(
+         "app_version_refused",
+         {
+            route = rule.name,
+            reason = version_check.reason,
+            client = version_check.client or "",
+            request_id = request.request_id,
+         }
+      )
+      if version_check.error_code == "UPGRADE_REQUIRED" then
+         return respond.upgrade_required(
+            errors.catalogue["UPGRADE_REQUIRED"],
+            request.request_id,
+            version_check.minimum_version,
+            version_check.store_url
+         )
+      end
+
+      return respond.error(version_check.error_code, request.request_id, nil)
+   end
+
+   if version_check.version ~= nil then
+      metrics.decision("app_version", "allowed")
+   end
+
    local authorization = context.single(request.headers, "authorization")
-   local principal_class = principal.class_from_bearer(authorization)
-   ngx.var.edge_principal_class = principal_class
+   local claims = principal.inspect(authorization, api_auth.expected_audience)
+   ngx.var.edge_principal_class = claims.principal_class
+
+   if rule.require_auth then
+      local auth_check = principal.authorize(claims, rule)
+      if not auth_check.ok then
+         metrics.decision("auth", auth_check.reason)
+         logger.info(
+            "auth_refused",
+            {
+               route = rule.name,
+               reason = auth_check.reason,
+               principal_class = claims.principal_class,
+               request_id = request.request_id,
+            }
+         )
+         return respond.error(auth_check.error_code, request.request_id, nil)
+      end
+
+      metrics.decision("auth", "allowed")
+   end
 
    local checked = early_checks.evaluate(rule, request.method, request.headers, json_body.raw)
    if not checked.ok then
@@ -42,7 +109,7 @@ function api_proxy.serve(request: RequestContext)
          {
             route = rule.name,
             reason = checked.reason,
-            principal_class = principal_class,
+            principal_class = claims.principal_class,
             request_id = request.request_id,
          }
       )
@@ -51,12 +118,40 @@ function api_proxy.serve(request: RequestContext)
 
    metrics.decision("early_check", "allowed")
 
+   local environment = settings.current.environment
+   if rule.rate_limit_group ~= nil then
+      local rl = rate_limiter.evaluate(environment, rule, request, claims, checked.body)
+      if not rl.ok then
+         if rl.unavailable then
+            return respond.error(rl.error_code, request.request_id, nil)
+         end
+
+         metrics.decision("rate_limit", rl.reason)
+         logger.info(
+            "rate_limited",
+            {
+               route = rule.name,
+               reason = rl.reason,
+               principal_class = claims.principal_class,
+               request_id = request.request_id,
+            }
+         )
+         return respond.edge_error(
+            errors.catalogue["TOO_MANY_REQUESTS"],
+            request.request_id,
+            nil,
+            rl.retry_after
+         )
+      end
+
+      metrics.decision("rate_limit", "allowed")
+   end
+
    local path = api_path.normalize(ngx.var.uri)
    if path == nil then
       return respond.error("NOT_FOUND", request.request_id, nil)
    end
 
-   local environment = settings.current.environment
    local base = environment.api_upstream
    if rule.target == "identity" then
       base = environment.identity_url

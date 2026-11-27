@@ -10,7 +10,12 @@ end
 
 local CODE = "123456"
 local CHALLENGE_ATTEMPTS = 5
-local CLIENTS: {string: boolean} = { ["backoffice"] = true, ["seller-web"] = true }
+local CLIENTS: {string: boolean} = {
+   ["backoffice"] = true,
+   ["seller-web"] = true,
+   ["courier-app"] = true,
+   ["buyer-app"] = true,
+}
 
 local users: {string: FakeUser} = {}
 local tokens: {string: FakeToken} = {}

@@ -1,9 +1,28 @@
 local forwarding = require("config.forwarding")
+local webhook = require("config.webhook")
 local type ApiRouteRule = require("types.api_route_rule")
 
 local record api_routes
    rules: {ApiRouteRule}
 end
+
+local ALL_ROLES: {string} = {
+   "customer",
+   "buyer",
+   "seller",
+   "merchant",
+   "courier",
+   "driver",
+   "admin",
+   "staff",
+}
+
+local BUYER_ROLES: {string} = { "customer", "buyer" }
+local SELLER_ROLES: {string} = { "seller", "merchant" }
+local COURIER_ROLES: {string} = { "courier", "driver" }
+local ADMIN_ROLES: {string} = { "admin" }
+local ORDER_READ_ROLES: {string} = { "customer", "buyer", "seller", "merchant", "admin", "staff" }
+local PAYMENT_ROLES: {string} = { "customer", "buyer", "seller", "merchant", "courier", "driver", "admin" }
 
 api_routes.rules = {
    {
@@ -16,6 +35,8 @@ api_routes.rules = {
       require_json = true,
       require_idempotency = false,
       strip_client_header = false,
+      require_auth = false,
+      rate_limit_group = "auth_login",
    },
    {
       name = "/api/v1/auth/register",
@@ -27,6 +48,8 @@ api_routes.rules = {
       require_json = true,
       require_idempotency = false,
       strip_client_header = false,
+      require_auth = false,
+      rate_limit_group = "auth_register",
    },
    {
       name = "/api/v1/auth/refresh",
@@ -38,6 +61,8 @@ api_routes.rules = {
       require_json = true,
       require_idempotency = false,
       strip_client_header = false,
+      require_auth = false,
+      rate_limit_group = "auth_public",
    },
    {
       name = "/api/v1/auth/2fa/verify",
@@ -49,6 +74,34 @@ api_routes.rules = {
       require_json = true,
       require_idempotency = false,
       strip_client_header = false,
+      require_auth = false,
+      rate_limit_group = "auth_public",
+   },
+   {
+      name = "/api/v1/auth/2fa/passkey/options",
+      prefix = "/api/v1/auth/2fa/passkey/options",
+      exact = true,
+      methods = { "POST" },
+      target = "identity",
+      max_body_bytes = 16384,
+      require_json = true,
+      require_idempotency = false,
+      strip_client_header = false,
+      require_auth = false,
+      rate_limit_group = "auth_public",
+   },
+   {
+      name = "/api/v1/auth/2fa/passkey/verify",
+      prefix = "/api/v1/auth/2fa/passkey/verify",
+      exact = true,
+      methods = { "POST" },
+      target = "identity",
+      max_body_bytes = 16384,
+      require_json = true,
+      require_idempotency = false,
+      strip_client_header = false,
+      require_auth = false,
+      rate_limit_group = "auth_public",
    },
    {
       name = "/api/v1/auth/logout",
@@ -60,6 +113,9 @@ api_routes.rules = {
       require_json = true,
       require_idempotency = false,
       strip_client_header = false,
+      require_auth = true,
+      allowed_roles = ALL_ROLES,
+      rate_limit_group = "api_user",
    },
    {
       name = "/api/v1/auth/{path}",
@@ -71,6 +127,9 @@ api_routes.rules = {
       require_json = true,
       require_idempotency = false,
       strip_client_header = false,
+      require_auth = true,
+      allowed_roles = ALL_ROLES,
+      rate_limit_group = "api_user",
    },
    {
       name = "/api/v1/couriers/register",
@@ -82,6 +141,8 @@ api_routes.rules = {
       require_json = true,
       require_idempotency = false,
       strip_client_header = false,
+      require_auth = false,
+      rate_limit_group = "auth_register",
    },
    {
       name = "/api/v1/couriers/{path}",
@@ -93,6 +154,9 @@ api_routes.rules = {
       require_json = true,
       require_idempotency = false,
       strip_client_header = false,
+      require_auth = true,
+      allowed_roles = ADMIN_ROLES,
+      rate_limit_group = "api_admin",
    },
    {
       name = "/api/v1/orders/checkout",
@@ -104,6 +168,65 @@ api_routes.rules = {
       require_json = true,
       require_idempotency = true,
       strip_client_header = true,
+      require_auth = true,
+      allowed_roles = BUYER_ROLES,
+      rate_limit_group = "checkout",
+   },
+   {
+      name = "/api/v1/orders/my-orders",
+      prefix = "/api/v1/orders/my-orders",
+      exact = true,
+      methods = { "GET" },
+      target = "api",
+      max_body_bytes = 65536,
+      require_json = true,
+      require_idempotency = false,
+      strip_client_header = true,
+      require_auth = true,
+      allowed_roles = BUYER_ROLES,
+      rate_limit_group = "api_user",
+   },
+   {
+      name = "/api/v1/orders/search",
+      prefix = "/api/v1/orders/search",
+      exact = true,
+      methods = { "GET" },
+      target = "api",
+      max_body_bytes = 65536,
+      require_json = true,
+      require_idempotency = false,
+      strip_client_header = true,
+      require_auth = true,
+      allowed_roles = ADMIN_ROLES,
+      rate_limit_group = "api_admin",
+   },
+   {
+      name = "/api/v1/orders/sagas/{path}",
+      prefix = "/api/v1/orders/sagas",
+      exact = false,
+      methods = forwarding.methods,
+      target = "api",
+      max_body_bytes = 65536,
+      require_json = true,
+      require_idempotency = false,
+      strip_client_header = true,
+      require_auth = true,
+      allowed_roles = ADMIN_ROLES,
+      rate_limit_group = "api_admin",
+   },
+   {
+      name = "/api/v1/orders/returns/needs-attention",
+      prefix = "/api/v1/orders/returns/needs-attention",
+      exact = true,
+      methods = { "GET" },
+      target = "api",
+      max_body_bytes = 65536,
+      require_json = true,
+      require_idempotency = false,
+      strip_client_header = true,
+      require_auth = true,
+      allowed_roles = ADMIN_ROLES,
+      rate_limit_group = "api_admin",
    },
    {
       name = "/api/v1/orders/{path}",
@@ -115,6 +238,9 @@ api_routes.rules = {
       require_json = true,
       require_idempotency = false,
       strip_client_header = true,
+      require_auth = true,
+      allowed_roles = ORDER_READ_ROLES,
+      rate_limit_group = "api_user",
    },
    {
       name = "/api/v1/cart/{path}",
@@ -126,6 +252,9 @@ api_routes.rules = {
       require_json = true,
       require_idempotency = false,
       strip_client_header = true,
+      require_auth = true,
+      allowed_roles = BUYER_ROLES,
+      rate_limit_group = "api_user",
    },
    {
       name = "/api/v1/payment/wallet/customer/topup",
@@ -137,6 +266,51 @@ api_routes.rules = {
       require_json = true,
       require_idempotency = true,
       strip_client_header = true,
+      require_auth = true,
+      allowed_roles = BUYER_ROLES,
+      rate_limit_group = "topup",
+   },
+   {
+      name = "/api/v1/payment/wallet/customer/{path}",
+      prefix = "/api/v1/payment/wallet/customer",
+      exact = false,
+      methods = { "GET" },
+      target = "api",
+      max_body_bytes = 16384,
+      require_json = true,
+      require_idempotency = false,
+      strip_client_header = true,
+      require_auth = true,
+      allowed_roles = BUYER_ROLES,
+      rate_limit_group = "api_user",
+   },
+   {
+      name = "/api/v1/payment/wallet/merchant/{path}",
+      prefix = "/api/v1/payment/wallet/merchant",
+      exact = false,
+      methods = { "GET" },
+      target = "api",
+      max_body_bytes = 16384,
+      require_json = true,
+      require_idempotency = false,
+      strip_client_header = true,
+      require_auth = true,
+      allowed_roles = SELLER_ROLES,
+      rate_limit_group = "api_user",
+   },
+   {
+      name = "/api/v1/payment/wallet/driver/{path}",
+      prefix = "/api/v1/payment/wallet/driver",
+      exact = false,
+      methods = { "GET" },
+      target = "api",
+      max_body_bytes = 16384,
+      require_json = true,
+      require_idempotency = false,
+      strip_client_header = true,
+      require_auth = true,
+      allowed_roles = COURIER_ROLES,
+      rate_limit_group = "api_user",
    },
    {
       name = "/api/v1/payment/gateway/midtrans/notifications",
@@ -148,6 +322,8 @@ api_routes.rules = {
       require_json = true,
       require_idempotency = false,
       strip_client_header = true,
+      require_auth = false,
+      allowed_cidrs = webhook.midtrans_cidrs,
    },
    {
       name = "/api/v1/payment/{path}",
@@ -159,6 +335,9 @@ api_routes.rules = {
       require_json = true,
       require_idempotency = false,
       strip_client_header = true,
+      require_auth = true,
+      allowed_roles = PAYMENT_ROLES,
+      rate_limit_group = "api_user",
    },
 }
 

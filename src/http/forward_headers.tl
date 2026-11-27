@@ -81,6 +81,11 @@ function forward_headers.api_upstream(
       if app_check ~= nil then
          headers["x-firebase-appcheck"] = joined(app_check)
       end
+
+      local app_version = browser["x-kinetix-app-version"]
+      if app_version ~= nil then
+         headers["x-kinetix-app-version"] = joined(app_version)
+      end
    end
 
    return headers

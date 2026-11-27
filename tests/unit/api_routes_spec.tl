@@ -27,6 +27,24 @@ describe("api_routes", function()
       check.present(login, "login matched")
       check.equal(login.target, "identity", "identity target")
       check.falsy(login.strip_client_header, "keeps client header for identity")
+      check.falsy(login.require_auth, "login is public")
+
+      local logout = api_routes.match("/api/v1/auth/logout")
+      check.present(logout, "logout matched")
+      check.truthy(logout.require_auth, "logout requires auth")
+
+      local passkey_verify = api_routes.match("/api/v1/auth/2fa/passkey/verify")
+      check.present(passkey_verify, "passkey verify matched")
+      check.falsy(passkey_verify.require_auth, "passkey verify stays public")
+
+      local courier_apps = api_routes.match("/api/v1/couriers/applications")
+      check.present(courier_apps, "courier apps matched")
+      check.truthy(courier_apps.require_auth, "courier apps require auth")
+      check.equal(courier_apps.allowed_roles[1], "admin", "courier apps require admin")
+
+      local midtrans = api_routes.match("/api/v1/payment/gateway/midtrans/notifications")
+      check.present(midtrans, "webhook matched")
+      check.present(midtrans.allowed_cidrs, "webhook configures Midtrans CIDRs")
 
       check.absent(api_routes.match("/api/v1/products"), "unlisted API prefix not matched")
    end)

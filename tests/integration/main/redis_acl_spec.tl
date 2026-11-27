@@ -41,6 +41,9 @@ describe("the edge's Redis user", function()
       local _, pub = connection:publish("matching:position:ORD-1", "{}")
       check.matches(pub, "^NOPERM", "PUBLISH is refused for edge")
 
+      local _, other_zset = connection:zadd("other:rl:probe", 1000, "m1")
+      check.matches(other_zset, "^NOPERM", "ZADD outside edge: is refused")
+
       local _, other_chan = connection:subscribe("other:channel:1")
       check.matches(other_chan, "^NOPERM", "channels outside matching:position:*")
 
@@ -72,5 +75,25 @@ describe("the edge's Redis user", function()
          check.matches(key, "^edge:", key .. " prefix")
          check.at_least(redis_admin.pttl(key), 1, key .. " TTL")
       end
+   end)
+
+   it("may maintain sliding-window rate-limit ZSETs under edge:rl:", function()
+      local connection = redis_admin.as_edge()
+      local zadded, add_err = connection:zadd("edge:rl:acl_probe", 1000, "m1")
+      check.absent(add_err, "ZADD allowed")
+      check.equal(zadded, 1, "one zset member added")
+
+      local pruned, rem_err = connection:zremrangebyscore("edge:rl:acl_probe", "-inf", 500)
+      check.absent(rem_err, "ZREMRANGEBYSCORE allowed")
+      check.equal(pruned, 0, "pruned count")
+
+      local counted, card_err = connection:zcard("edge:rl:acl_probe")
+      check.absent(card_err, "ZCARD allowed")
+      check.equal(counted, 1, "zcard count")
+
+      local expired, exp_err = connection:pexpire("edge:rl:acl_probe", 5000)
+      check.absent(exp_err, "PEXPIRE allowed")
+      check.equal(expired, 1, "pexpire set")
+      connection:close()
    end)
 end)
