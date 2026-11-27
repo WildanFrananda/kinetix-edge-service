@@ -1,5 +1,6 @@
 local cjson = require("cjson.safe")
 local metrics = require("adapters.metrics")
+local redis = require("resty.redis")
 local redis_store = require("adapters.redis_store")
 local type Environment = require("types.environment")
 local type KillSwitchState = require("types.kill_switch_state")
@@ -48,6 +49,16 @@ local function decode_state(raw: string): KillSwitchState
    }
 end
 
+function kill_switch_store.read_client(client: redis.Client, feature: string): KillSwitchState, boolean
+   local raw, failure = redis_store.read(client, kill_switch_store.key_of(feature))
+   if failure ~= nil then
+      metrics.dependency_failed("redis")
+      return nil, true
+   end
+
+   return decode_state(raw), false
+end
+
 function kill_switch_store.read(environment: Environment, feature: string): KillSwitchState, boolean
    local client = redis_store.open(environment)
    if client == nil then
@@ -55,14 +66,13 @@ function kill_switch_store.read(environment: Environment, feature: string): Kill
       return nil, true
    end
 
-   local raw, failure = redis_store.read(client, kill_switch_store.key_of(feature))
-   if failure ~= nil then
-      metrics.dependency_failed("redis")
+   local state, unavailable = kill_switch_store.read_client(client, feature)
+   if unavailable then
       return nil, true
    end
 
    redis_store.release(client)
-   return decode_state(raw), false
+   return state, false
 end
 
 function kill_switch_store.enable(

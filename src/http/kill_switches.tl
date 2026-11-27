@@ -3,6 +3,7 @@ local digest = require("adapters.digest")
 local kill_switch_store = require("adapters.kill_switch_store")
 local kill_switches_config = require("config.kill_switches")
 local logger = require("adapters.logger")
+local redis = require("resty.redis")
 local type Environment = require("types.environment")
 local type KillSwitchCheck = require("types.kill_switch_check")
 local type KillSwitchRule = require("types.kill_switch_rule")
@@ -73,6 +74,16 @@ function kill_switches.evaluate(environment: Environment, feature: string): Kill
 
    local state, unavailable = kill_switch_store.read(environment, string.lower(feature))
    return kill_switches.evaluate_state(state, unavailable, string.lower(feature))
+end
+
+function kill_switches.check_client(client: redis.Client, feature: string): KillSwitchCheck
+   if feature == nil or feature == "" then
+      return { ok = true, unavailable = false }
+   end
+
+   local lower = string.lower(feature)
+   local state, unavailable = kill_switch_store.read_client(client, lower)
+   return kill_switches.evaluate_state(state, unavailable, lower)
 end
 
 function kill_switches.get_state(environment: Environment, feature: string): KillSwitchState, boolean
