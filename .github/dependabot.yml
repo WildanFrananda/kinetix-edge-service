@@ -9,6 +9,8 @@ updates:
       interval: daily
       time: "07:00"
       timezone: Asia/Jakarta
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
       base-images:
@@ -29,6 +31,8 @@ updates:
       day: monday
       time: "07:00"
       timezone: Asia/Jakarta
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
       minor-and-patch:

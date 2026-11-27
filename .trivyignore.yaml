@@ -1,0 +1,7 @@
+misconfigurations:
+  - id: DS-0002
+    paths:
+      - "toolchain/Dockerfile"
+  - id: DS-0026
+    paths:
+      - "toolchain/Dockerfile"

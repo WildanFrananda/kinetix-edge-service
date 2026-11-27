@@ -58,6 +58,10 @@ errors.catalogue = {
    HEADERS_TOO_LARGE = entry(431, "HEADERS_TOO_LARGE", "The request headers are larger than the edge accepts."),
    JSON_REQUIRED = entry(415, "JSON_REQUIRED", "Request bodies must be application/json."),
    WEBSOCKET_REQUIRED = entry(426, "WEBSOCKET_REQUIRED", "This path takes a WebSocket upgrade only."),
+   TOKEN_REQUIRED = entry(401, "TOKEN_REQUIRED", "A valid access token is required."),
+   FORBIDDEN = entry(403, "FORBIDDEN", "This token cannot use that endpoint."),
+   WEBHOOK_FORBIDDEN = entry(403, "WEBHOOK_FORBIDDEN", "Webhook sender address is not allowed."),
+   UPGRADE_REQUIRED = entry(426, "UPGRADE_REQUIRED", "Update the application before continuing."),
    SIGN_IN_DELAYED = entry(
       429,
       "SIGN_IN_DELAYED",

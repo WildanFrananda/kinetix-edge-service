@@ -42,6 +42,22 @@ function respond.edge_error(failure: EdgeError, request_id: string, set_cookies:
    respond.json(failure.status, body, set_cookies)
 end
 
+function respond.upgrade_required(
+   failure: EdgeError,
+   request_id: string,
+   minimum_version: string,
+   store_url: string
+)
+   local body: ErrorBody = {
+      error = failure.code,
+      message = failure.message,
+      requestId = request_id,
+      minimumVersion = minimum_version,
+      storeUrl = store_url,
+   }
+   respond.json(failure.status, body, nil)
+end
+
 function respond.error(code: string, request_id: string, set_cookies: {string})
    respond.edge_error(errors.catalogue[code], request_id, set_cookies, nil)
 end

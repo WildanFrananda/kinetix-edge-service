@@ -32,6 +32,14 @@ describe("metrics", function()
          "duration")
       check.present(line_of(text, "kinetix_edge_decisions_total{rule=\"early_check\",outcome=\"allowed\"} 0"),
          "decision prepublished")
+      check.present(line_of(text, "kinetix_edge_decisions_total{rule=\"webhook\",outcome=\"refused\"} 0"),
+         "webhook decision prepublished")
+      check.present(line_of(text, "kinetix_edge_decisions_total{rule=\"app_version\",outcome=\"upgrade_required\"} 0"),
+         "app version decision prepublished")
+      check.present(line_of(text, "kinetix_edge_decisions_total{rule=\"auth\",outcome=\"role_refused\"} 0"),
+         "auth decision prepublished")
+      check.present(line_of(text, "kinetix_edge_decisions_total{rule=\"rate_limit\",outcome=\"auth_login_email\"} 0"),
+         "rate limit decision prepublished")
    end)
 
    it("records proxied API metrics by route and principal class and edge decisions", function()

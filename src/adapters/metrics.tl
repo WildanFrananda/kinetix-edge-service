@@ -15,6 +15,10 @@ local record metrics
    revocation_outcomes: {string}
    principal_classes: {string}
    early_check_outcomes: {string}
+   webhook_outcomes: {string}
+   app_version_outcomes: {string}
+   auth_outcomes: {string}
+   rate_limit_outcomes: {string}
 end
 
 metrics.dict_name = "edge_metrics"
@@ -47,6 +51,42 @@ metrics.socket_outcomes = {
 metrics.revocation_outcomes = { "revoked", "already_revoked", "failed" }
 
 metrics.principal_classes = { "buyer", "seller", "courier", "admin", "anonymous" }
+
+metrics.webhook_outcomes = {
+   "allowed",
+   "refused",
+}
+
+metrics.app_version_outcomes = {
+   "allowed",
+   "upgrade_required",
+   "malformed_version",
+}
+
+metrics.auth_outcomes = {
+   "allowed",
+   "token_required",
+   "wrong_token_use",
+   "wrong_audience",
+   "role_refused",
+}
+
+metrics.rate_limit_outcomes = {
+   "allowed",
+   "auth_login_ip",
+   "auth_login_email",
+   "auth_register_ip",
+   "auth_register_email",
+   "auth_public_ip",
+   "checkout_ip",
+   "checkout_principal",
+   "topup_ip",
+   "topup_principal",
+   "api_user_ip",
+   "api_user_principal",
+   "api_admin_ip",
+   "api_admin_principal",
+}
 
 metrics.early_check_outcomes = {
    "allowed",
@@ -282,6 +322,22 @@ function metrics.prepublish()
 
    for _, dependency in ipairs(metrics.dependencies) do
       zero(series(DEPENDENCY_FAILURES, { { "dependency", dependency } }))
+   end
+
+   for _, outcome in ipairs(metrics.webhook_outcomes) do
+      zero(series(DECISIONS, { { "rule", "webhook" }, { "outcome", outcome } }))
+   end
+
+   for _, outcome in ipairs(metrics.app_version_outcomes) do
+      zero(series(DECISIONS, { { "rule", "app_version" }, { "outcome", outcome } }))
+   end
+
+   for _, outcome in ipairs(metrics.auth_outcomes) do
+      zero(series(DECISIONS, { { "rule", "auth" }, { "outcome", outcome } }))
+   end
+
+   for _, outcome in ipairs(metrics.rate_limit_outcomes) do
+      zero(series(DECISIONS, { { "rule", "rate_limit" }, { "outcome", outcome } }))
    end
 
    for _, outcome in ipairs(metrics.early_check_outcomes) do
