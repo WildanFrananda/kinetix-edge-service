@@ -32,6 +32,10 @@ rate_limits.groups = {
       { name = "api_admin_ip", max_requests = 300, window_ms = 60000, key_scope = "ip" },
       { name = "api_admin_principal", max_requests = 180, window_ms = 60000, key_scope = "principal" },
    },
+   ["ws_command"] = {
+      { name = "ws_command_ip", max_requests = 120, window_ms = 60000, key_scope = "ip" },
+      { name = "ws_command_principal", max_requests = 60, window_ms = 60000, key_scope = "principal" },
+   },
 }
 
 function rate_limits.for_group(group: string): {RateLimitRule}

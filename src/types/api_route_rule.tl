@@ -12,6 +12,7 @@ local record ApiRouteRule
    allowed_roles: {string}
    allowed_cidrs: {string}
    rate_limit_group: string
+   kill_switch: string
 end
 
 return ApiRouteRule

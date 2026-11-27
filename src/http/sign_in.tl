@@ -1,10 +1,12 @@
 local cjson = require("cjson.safe")
 local context = require("http.context")
 local cookies = require("http.cookies")
+local errors = require("http.errors")
 local identity_answers = require("http.identity_answers")
 local identity_client = require("adapters.identity_client")
 local json_body = require("http.json_body")
 local json_relay = require("adapters.json_relay")
+local kill_switches = require("http.kill_switches")
 local lifetimes = require("http.lifetimes")
 local logger = require("adapters.logger")
 local metrics = require("adapters.metrics")
@@ -12,8 +14,8 @@ local redis = require("resty.redis")
 local redis_store = require("adapters.redis_store")
 local respond = require("http.respond")
 local sessions = require("http.sessions")
+local settings = require("http.settings")
 local clock = require("adapters.clock")
-local errors = require("http.errors")
 local type AppPolicy = require("types.app_policy")
 local type ChallengeView = require("types.challenge_view")
 local type PendingSignIn = require("types.pending_sign_in")
@@ -218,6 +220,22 @@ local function settle_login(client: redis.Client, request: RequestContext, reply
 end
 
 function sign_in.login(request: RequestContext)
+   local ks = kill_switches.evaluate(settings.current.environment, "login")
+   if not ks.ok then
+      if ks.unavailable then
+         return respond.error("SESSION_STORE_UNAVAILABLE", request.request_id, nil)
+      end
+
+      metrics.decision("kill_switch", "login")
+      logger.info("kill_switch_refused", { route = "/bff/login", feature = "login", request_id = request.request_id })
+      return respond.feature_disabled(
+         errors.catalogue["FEATURE_DISABLED"],
+         request.request_id,
+         ks.retry_after,
+         ks.message_key
+      )
+   end
+
    local body = json_body.object()
    local email = json_body.text(body, "email", 254)
    local password = json_body.text(body, "password", 1024)

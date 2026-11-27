@@ -7,6 +7,7 @@ local forward = require("http.forward")
 local forwarding = require("config.forwarding")
 local health = require("http.health")
 local json_body = require("http.json_body")
+local kill_switch_endpoint = require("http.kill_switch_endpoint")
 local logger = require("adapters.logger")
 local logout = require("http.logout")
 local merchant_socket = require("http.merchant_socket")
@@ -33,6 +34,10 @@ end
 
 local function offers_merchant_socket(app: AppPolicy): boolean
    return #app.merchant_socket_roles > 0
+end
+
+local function offers_backoffice(app: AppPolicy): boolean
+   return app.name == "backoffice"
 end
 
 router.routes = {
@@ -126,6 +131,24 @@ router.routes = {
       methods = { "POST" },
       for_app = true,
       handler = logout.serve,
+   },
+   {
+      path = "/bff/edge/kill-switches",
+      prefix = false,
+      name = "/bff/edge/kill-switches",
+      methods = { "GET" },
+      for_app = true,
+      offered = offers_backoffice,
+      handler = kill_switch_endpoint.list,
+   },
+   {
+      path = "/bff/edge/kill-switches",
+      prefix = true,
+      name = "/bff/edge/kill-switches/{feature}",
+      methods = { "GET", "PUT", "DELETE" },
+      for_app = true,
+      offered = offers_backoffice,
+      handler = kill_switch_endpoint.serve,
    },
    {
       path = "/bff/ws/v1/matching/merchant",

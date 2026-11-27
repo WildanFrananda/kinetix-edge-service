@@ -10,6 +10,7 @@ local event_protocol = require("http.event_protocol")
 local forward_headers = require("http.forward_headers")
 local ip_cidr = require("http.ip_cidr")
 local json_body = require("http.json_body")
+local kill_switches = require("http.kill_switches")
 local logger = require("adapters.logger")
 local metrics = require("adapters.metrics")
 local principal = require("http.principal")
@@ -46,6 +47,28 @@ function api_proxy.serve(request: RequestContext)
       end
 
       metrics.decision("webhook", "allowed")
+   end
+
+   local environment = settings.current.environment
+   if rule.kill_switch ~= nil then
+      local ks = kill_switches.evaluate(environment, rule.kill_switch)
+      if not ks.ok then
+         if ks.unavailable then
+            return respond.error("SESSION_STORE_UNAVAILABLE", request.request_id, nil)
+         end
+
+         metrics.decision("kill_switch", rule.kill_switch)
+         logger.info(
+            "kill_switch_refused",
+            { route = rule.name, feature = rule.kill_switch, request_id = request.request_id }
+         )
+         return respond.feature_disabled(
+            errors.catalogue["FEATURE_DISABLED"],
+            request.request_id,
+            ks.retry_after,
+            ks.message_key
+         )
+      end
    end
 
    local client_header = context.single(request.headers, "x-kinetix-client")
@@ -118,7 +141,6 @@ function api_proxy.serve(request: RequestContext)
 
    metrics.decision("early_check", "allowed")
 
-   local environment = settings.current.environment
    if rule.rate_limit_group ~= nil then
       local rl = rate_limiter.evaluate(environment, rule, request, claims, checked.body)
       if not rl.ok then

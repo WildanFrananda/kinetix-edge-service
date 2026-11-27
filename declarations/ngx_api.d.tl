@@ -24,6 +24,7 @@ local record Ngx
    record thread
       spawn: function(function(): string): Thread
       wait: function(Thread): boolean, string
+      kill: function(Thread): integer, string
    end
 
    record re
