@@ -4,4 +4,9 @@
 
 Do not open public GitHub issues for security vulnerabilities or suspected secret exposure.
 
-Report findings privately through GitHub Security Advisories (**Security -> Advisories -> Report a vulnerability**) on this repository or contact the repository maintainers directly with reproduction details and affected endpoints.
+Report vulnerabilities privately using [GitHub Security Advisories](https://github.com/WildanFrananda/kinetix-edge-service/security/advisories/new).
+
+## Coordinated Disclosure
+
+- Initial acknowledgement within 3 days of a report.
+- Coordinated fix and public disclosure timeline targeted within 30 days (maximum 90 days for complex mitigations).
