@@ -63,6 +63,7 @@ local record Ngx
    exec: function(string)
    escape_uri: function(string): string
    encode_base64: function(string, boolean): string
+   decode_base64: function(string): string
 end
 
 return Ngx

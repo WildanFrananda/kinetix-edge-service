@@ -13,6 +13,8 @@ local record metrics
    dependencies: {string}
    socket_outcomes: {string}
    revocation_outcomes: {string}
+   principal_classes: {string}
+   early_check_outcomes: {string}
 end
 
 metrics.dict_name = "edge_metrics"
@@ -44,8 +46,22 @@ metrics.socket_outcomes = {
 
 metrics.revocation_outcomes = { "revoked", "already_revoked", "failed" }
 
+metrics.principal_classes = { "buyer", "seller", "courier", "admin", "anonymous" }
+
+metrics.early_check_outcomes = {
+   "allowed",
+   "idempotency_key_required",
+   "invalid_content_length",
+   "payload_too_large",
+   "json_required",
+   "invalid_json",
+}
+
 local REQUESTS = "kinetix_http_requests_total"
 local DURATION = "kinetix_http_request_duration_seconds"
+local API_REQUESTS = "kinetix_edge_api_requests_total"
+local API_DURATION = "kinetix_edge_api_request_duration_seconds"
+local DECISIONS = "kinetix_edge_decisions_total"
 local BUILD_INFO = "kinetix_build_info"
 local SESSIONS_STARTED = "kinetix_edge_sessions_started_total"
 local SESSIONS_ENDED = "kinetix_edge_sessions_ended_total"
@@ -58,6 +74,17 @@ local SESSION_REVOCATIONS = "kinetix_edge_session_revocations_total"
 local FAMILIES: {MetricFamily} = {
    { name = REQUESTS, help = "HTTP requests answered, by method, route and status.", kind = "counter" },
    { name = DURATION, help = "Seconds spent answering an HTTP request, by method and route.", kind = "histogram" },
+   {
+      name = API_REQUESTS,
+      help = "Proxied API requests answered, by route, principal class and status.",
+      kind = "counter",
+   },
+   {
+      name = API_DURATION,
+      help = "Seconds spent handling a proxied API request, by route and principal class.",
+      kind = "histogram",
+   },
+   { name = DECISIONS, help = "Edge policy decisions made, by rule and outcome.", kind = "counter" },
    { name = BUILD_INFO, help = "Always 1. The labels say which build answered this scrape.", kind = "gauge" },
    { name = SESSIONS_STARTED, help = "Browser sessions started, by application.", kind = "counter" },
    { name = SESSIONS_ENDED, help = "Browser sessions ended, by application and reason.", kind = "counter" },
@@ -127,7 +154,7 @@ local function method_label(method: string): string
    return "OTHER"
 end
 
-local function histogram_keys(labels: metrics.Labels): {string}
+local function histogram_keys(metric_name: string, labels: metrics.Labels): {string}
    local keys: {string} = {}
    for _, bound in ipairs(metrics.buckets) do
       local with_bound: metrics.Labels = {}
@@ -136,7 +163,7 @@ local function histogram_keys(labels: metrics.Labels): {string}
       end
 
       table.insert(with_bound, { "le", bucket_label(bound) })
-      table.insert(keys, series(DURATION .. "_bucket", with_bound))
+      table.insert(keys, series(metric_name .. "_bucket", with_bound))
    end
 
    local with_infinity: metrics.Labels = {}
@@ -145,17 +172,13 @@ local function histogram_keys(labels: metrics.Labels): {string}
    end
 
    table.insert(with_infinity, { "le", "+Inf" })
-   table.insert(keys, series(DURATION .. "_bucket", with_infinity))
+   table.insert(keys, series(metric_name .. "_bucket", with_infinity))
 
    return keys
 end
 
-function metrics.request(method: string, route: string, status: integer, seconds: number)
-   local verb = method_label(method)
-   add(series(REQUESTS, { { "method", verb }, { "route", route }, { "status", string.format("%d", status) } }), 1)
-
-   local labels: metrics.Labels = { { "method", verb }, { "route", route } }
-   local keys = histogram_keys(labels)
+local function record_histogram(metric_name: string, labels: metrics.Labels, seconds: number)
+   local keys = histogram_keys(metric_name, labels)
    for index, bound in ipairs(metrics.buckets) do
       if seconds <= bound then
          add(keys[index], 1)
@@ -163,8 +186,30 @@ function metrics.request(method: string, route: string, status: integer, seconds
    end
 
    add(keys[#keys], 1)
-   add(series(DURATION .. "_sum", labels), seconds)
-   add(series(DURATION .. "_count", labels), 1)
+   add(series(metric_name .. "_sum", labels), seconds)
+   add(series(metric_name .. "_count", labels), 1)
+end
+
+function metrics.request(method: string, route: string, status: integer, seconds: number)
+   local verb = method_label(method)
+   add(series(REQUESTS, { { "method", verb }, { "route", route }, { "status", string.format("%d", status) } }), 1)
+   record_histogram(DURATION, { { "method", verb }, { "route", route } }, seconds)
+end
+
+function metrics.api_request(route: string, principal_class: string, status: integer, seconds: number)
+   local labels: metrics.Labels = { { "route", route }, { "principal_class", principal_class } }
+   add(
+      series(
+         API_REQUESTS,
+         { { "route", route }, { "principal_class", principal_class }, { "status", string.format("%d", status) } }
+      ),
+      1
+   )
+   record_histogram(API_DURATION, labels, seconds)
+end
+
+function metrics.decision(rule: string, outcome: string)
+   add(series(DECISIONS, { { "rule", rule }, { "outcome", outcome } }), 1)
 end
 
 function metrics.session_started(app: string)
@@ -199,7 +244,7 @@ local function prepublish_route(route: string)
    zero(series(REQUESTS, { { "method", "GET" }, { "route", route }, { "status", "200" } }))
 
    local labels: metrics.Labels = { { "method", "GET" }, { "route", route } }
-   for _, key in ipairs(histogram_keys(labels)) do
+   for _, key in ipairs(histogram_keys(DURATION, labels)) do
       zero(key)
    end
 
@@ -238,6 +283,10 @@ function metrics.prepublish()
    for _, dependency in ipairs(metrics.dependencies) do
       zero(series(DEPENDENCY_FAILURES, { { "dependency", dependency } }))
    end
+
+   for _, outcome in ipairs(metrics.early_check_outcomes) do
+      zero(series(DECISIONS, { { "rule", "early_check" }, { "outcome", outcome } }))
+   end
 end
 
 local function starts_with(value: string, prefix: string): boolean
@@ -252,9 +301,9 @@ local function number_text(value: number): string
    return string.format("%.9g", value)
 end
 
-local function histogram_lines(lines: {string}, keys: {string}, values: {string: number})
+local function histogram_lines(metric_name: string, lines: {string}, keys: {string}, values: {string: number})
    local label_sets: {string} = {}
-   local count_prefix = DURATION .. "_count{"
+   local count_prefix = metric_name .. "_count{"
    for _, key in ipairs(keys) do
       if starts_with(key, count_prefix) then
          table.insert(label_sets, string.sub(key, #count_prefix + 1, #key - 1))
@@ -265,17 +314,17 @@ local function histogram_lines(lines: {string}, keys: {string}, values: {string:
 
    for _, labels in ipairs(label_sets) do
       for _, bound in ipairs(metrics.buckets) do
-         local key = DURATION .. "_bucket{" .. labels .. ",le=\"" .. bucket_label(bound) .. "\"}"
+         local key = metric_name .. "_bucket{" .. labels .. ",le=\"" .. bucket_label(bound) .. "\"}"
          table.insert(lines, key .. " " .. number_text(values[key] or 0))
       end
 
-      local infinity = DURATION .. "_bucket{" .. labels .. ",le=\"+Inf\"}"
+      local infinity = metric_name .. "_bucket{" .. labels .. ",le=\"+Inf\"}"
       table.insert(lines, infinity .. " " .. number_text(values[infinity] or 0))
 
-      local sum = DURATION .. "_sum{" .. labels .. "}"
+      local sum = metric_name .. "_sum{" .. labels .. "}"
       table.insert(lines, sum .. " " .. number_text(values[sum] or 0))
 
-      local count = DURATION .. "_count{" .. labels .. "}"
+      local count = metric_name .. "_count{" .. labels .. "}"
       table.insert(lines, count .. " " .. number_text(values[count] or 0))
    end
 end
@@ -296,7 +345,7 @@ function metrics.render(service: string, version: string): string
       table.insert(lines, "# TYPE " .. family.name .. " " .. family.kind)
 
       if family.kind == "histogram" then
-         histogram_lines(lines, keys, values)
+         histogram_lines(family.name, lines, keys, values)
       elseif family.name == BUILD_INFO then
          table.insert(lines, series(BUILD_INFO, { { "service", service }, { "version", version } }) .. " 1")
       else

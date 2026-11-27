@@ -17,6 +17,11 @@ function access_log.write()
    end
 
    metrics.request(method, route, status, seconds)
+   local principal_class = ngx.var.edge_principal_class or ""
+   if principal_class ~= "" then
+      metrics.api_request(route, principal_class, status, seconds)
+   end
+
    logger.info(
       "request",
       {
@@ -27,6 +32,7 @@ function access_log.write()
          request_id = request_id,
          app = ngx.var.edge_app or "",
          session = ngx.var.edge_session_tag or "",
+         principal_class = principal_class,
       }
    )
 end
