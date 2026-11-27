@@ -30,6 +30,34 @@ describe("metrics", function()
          "requests")
       check.present(line_of(text, "kinetix_http_request_duration_seconds_count{method=\"GET\",route=\"/health\"} 0"),
          "duration")
+      check.present(line_of(text, "kinetix_edge_decisions_total{rule=\"early_check\",outcome=\"allowed\"} 0"),
+         "decision prepublished")
+   end)
+
+   it("records proxied API metrics by route and principal class and edge decisions", function()
+      metrics.api_request("/api/v1/orders/checkout", "buyer", 200, 0.08)
+      metrics.decision("early_check", "idempotency_key_required")
+      local text = metrics.render("kinetix-edge-service", "abc123")
+      check.present(
+         line_of(
+            text,
+            "kinetix_edge_api_requests_total"
+               .. "{route=\"/api/v1/orders/checkout\",principal_class=\"buyer\",status=\"200\"}"
+         ),
+         "api request counter"
+      )
+      check.present(
+         line_of(
+            text,
+            "kinetix_edge_api_request_duration_seconds_count"
+               .. "{route=\"/api/v1/orders/checkout\",principal_class=\"buyer\"}"
+         ),
+         "api request duration"
+      )
+      check.present(
+         line_of(text, "kinetix_edge_decisions_total{rule=\"early_check\",outcome=\"idempotency_key_required\"}"),
+         "decision counter"
+      )
    end)
 
    it("names the service and its build only in kinetix_build_info", function()

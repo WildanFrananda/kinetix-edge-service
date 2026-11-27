@@ -1,3 +1,5 @@
+local api_proxy = require("http.api_proxy")
+local api_routes = require("config.api_routes")
 local context = require("http.context")
 local csrf = require("http.csrf")
 local event_socket = require("http.event_socket")
@@ -182,6 +184,18 @@ local function route_for(uri: string): Route
       if matches(route, uri) then
          return route
       end
+   end
+
+   local api_rule = api_routes.match(uri)
+   if api_rule ~= nil then
+      return {
+         path = api_rule.prefix,
+         prefix = not api_rule.exact,
+         name = api_rule.name,
+         methods = api_rule.methods,
+         for_app = false,
+         handler = api_proxy.serve,
+      }
    end
 
    return nil

@@ -6,12 +6,11 @@ end
 
 api_path.prefix = "/bff/api"
 
-function api_path.upstream(uri: string): string
-   if string.sub(uri, 1, #api_path.prefix + 1) ~= api_path.prefix .. "/" then
+function api_path.normalize(rest: string): string
+   if rest == nil then
       return nil
    end
 
-   local rest = string.sub(uri, #api_path.prefix + 1)
    local segments: {string} = {}
    for segment in string.gmatch(rest, "[^/]+") do
       if segment == "." or segment == ".." then
@@ -21,12 +20,25 @@ function api_path.upstream(uri: string): string
       table.insert(segments, ngx.escape_uri(segment))
    end
 
-   local path = "/api/" .. table.concat(segments, "/")
+   local path = "/" .. table.concat(segments, "/")
    if string.sub(rest, -1) == "/" and #segments > 0 then
       return path .. "/"
    end
 
    return path
+end
+
+function api_path.upstream(uri: string): string
+   if string.sub(uri, 1, #api_path.prefix + 1) ~= api_path.prefix .. "/" then
+      return nil
+   end
+
+   local normalized = api_path.normalize(string.sub(uri, #api_path.prefix + 1))
+   if normalized == nil then
+      return nil
+   end
+
+   return "/api" .. normalized
 end
 
 local function under_any(path: string, prefixes: {string}): boolean

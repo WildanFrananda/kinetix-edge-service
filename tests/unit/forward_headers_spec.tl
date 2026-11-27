@@ -1,6 +1,31 @@
 local check = require("tests.support.check")
 local forward_headers = require("http.forward_headers")
+local type ApiRouteRule = require("types.api_route_rule")
 local type RequestContext = require("types.request_context")
+
+local STRIP_RULE: ApiRouteRule = {
+   name = "/api/v1/orders/checkout",
+   prefix = "/api/v1/orders/checkout",
+   exact = true,
+   methods = { "POST" },
+   target = "api",
+   max_body_bytes = 65536,
+   require_json = true,
+   require_idempotency = true,
+   strip_client_header = true,
+}
+
+local IDENTITY_RULE: ApiRouteRule = {
+   name = "/api/v1/auth/login",
+   prefix = "/api/v1/auth/login",
+   exact = true,
+   methods = { "POST" },
+   target = "identity",
+   max_body_bytes = 16384,
+   require_json = true,
+   require_idempotency = false,
+   strip_client_header = false,
+}
 
 local REQUEST: RequestContext = {
    request_id = "req-1",
@@ -76,5 +101,36 @@ describe("forward_headers", function()
       check.absent(downstream["X-Powered-By"], "x-powered-by")
       check.equal(downstream["Content-Type"], "application/json", "content type kept")
       check.equal(downstream["X-Request-Id"], "req-1", "request id kept")
+   end)
+
+   it("sanitizes X-Kinetix-* hint headers on proxied API routes", function()
+      local browser = {
+         ["x-kinetix-client"] = "courier",
+         ["x-firebase-appcheck"] = "appcheck-1",
+         ["x-kinetix-origin"] = "https://forged.example",
+         ["x-kinetix-locale"] = "id",
+         ["x-kinetix-app-version"] = "9.9.9",
+         ["x-kinetix-experiment"] = "canary",
+         ["x-user-id"] = "999",
+         ["cookie"] = "secret=1",
+         ["idempotency-key"] = "idem-1",
+      }
+      local api_headers = forward_headers.api_upstream(browser, REQUEST, STRIP_RULE, "tok-1")
+      check.equal(api_headers["authorization"], "Bearer tok-1", "bearer kept")
+      check.equal(api_headers["idempotency-key"], "idem-1", "idempotency key kept")
+      check.absent(api_headers["x-kinetix-client"], "client stripped on non-identity routes")
+      check.absent(api_headers["x-firebase-appcheck"], "appcheck stripped on non-identity routes")
+      check.absent(api_headers["x-kinetix-origin"], "origin hint stripped")
+      check.absent(api_headers["x-kinetix-locale"], "locale hint stripped")
+      check.absent(api_headers["x-kinetix-app-version"], "app version hint stripped")
+      check.absent(api_headers["x-kinetix-experiment"], "experiment hint stripped")
+      check.absent(api_headers["x-user-id"], "user id stripped")
+      check.absent(api_headers["cookie"], "cookie stripped")
+
+      local id_headers = forward_headers.api_upstream(browser, REQUEST, IDENTITY_RULE, nil)
+      check.equal(id_headers["x-kinetix-client"], "courier", "client kept for identity")
+      check.equal(id_headers["x-firebase-appcheck"], "appcheck-1", "appcheck kept for identity")
+      check.absent(id_headers["x-kinetix-origin"], "origin hint still stripped for identity")
+      check.absent(id_headers["x-kinetix-locale"], "locale hint still stripped for identity")
    end)
 end)

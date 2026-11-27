@@ -23,7 +23,9 @@ On port `8080`, plain HTTP on the Docker network. The gateway sends only `/bff/.
 | `POST` | `/bff/2fa/enable` | `{ code }` → `{ enabled: true }`; the user then signs in again |
 | `POST` | `/bff/logout` | logs out at identity with the refresh token, deletes the session, expires both cookies (`204`, also when identity revoked the tokens and Redis then failed) |
 | `GET` | `/bff/ws/v1/matching/merchant`, `/bff/ws/v1/matching/merchant/websocket` | seller web only: a WebSocket upgrade from the app's own `Origin` with a `seller` session, proxied (query included) to matching's merchant socket through `${EDGE_API_UPSTREAM}`; the access token travels upstream in the `Sec-WebSocket-Protocol` entry `base64url.bearer.phx.<token>` and never back; the browser is answered `phoenix` only if it offered it |
+| `GET` | `/bff/ws/v1/events`, `/ws/v1/events` | unified `camelCase` JSON event WebSocket (X21) for buyers, sellers, and couriers; Redis `matching:position:*` latest-wins relay and matching upstream bridge |
 | any of `GET HEAD POST PUT PATCH DELETE` | `/bff/api/<path>` | forwarded to `${EDGE_API_UPSTREAM}/api/<path>` with the session's bearer; identity's throttled routes (`/api/v1/auth`, `/api/v1/couriers`) go to `${IDENTITY_HTTP_URL}` directly |
+| any of `GET HEAD POST PUT PATCH DELETE` | `/api/v1/{auth,couriers,orders,cart,payment}...` | selective public API proxy (X15 security headers, X16 body/JSON/`Idempotency-Key` early checks, X18 principal-class metrics, X19 `X-Kinetix-*` hint sanitization) |
 | `GET` | `/health` | the process |
 | `GET` | `/health/ready` | Redis answers `PING` as the edge user |
 
@@ -33,7 +35,7 @@ Every answer carries `Cache-Control: no-store`. Every error is `{ error, message
 
 | Status | `error` |
 | --- | --- |
-| 400 | `INVALID_REQUEST`, `CLIENT_ADDRESS_REQUIRED` |
+| 400 | `INVALID_REQUEST`, `CLIENT_ADDRESS_REQUIRED`, `IDEMPOTENCY_KEY_REQUIRED` |
 | 401 | `SIGN_IN_REFUSED`, `CODE_REFUSED`, `PASSKEY_REFUSED`, `SIGN_IN_REQUIRED`, `SESSION_REQUIRED`, `SESSION_ENDED` |
 | 403 | `CSRF_REFUSED`, `ROLE_REFUSED`, `SELLER_REQUIRED` (the merchant socket; the session is kept) |
 | 404, 405 | `NOT_FOUND`, `METHOD_NOT_ALLOWED` (with `Allow`) |
@@ -75,7 +77,7 @@ argument of that name).
 The Redis ACL user the edge needs, exactly (the integration suite runs under it):
 
 ```
-user edge on >PASSWORD ~edge:* resetchannels -@all +auth +ping +get +set +del +hset +hgetall +pexpire +multi +exec
+user edge on >PASSWORD ~edge:* resetchannels &matching:position:* -@all +auth +ping +get +set +del +hset +hgetall +pexpire +multi +exec +subscribe +psubscribe +unsubscribe +punsubscribe +incr +zadd +zremrangebyscore +zcard
 ```
 
 Keys: `edge:session:<sha256 of the cookie>` (hash, idle TTL), `edge:pending:<sha256>` (hash, identity's challenge or
@@ -90,7 +92,9 @@ enrolment lifetime), `edge:refresh:<sha256>` (string, 15 s single-flight lock). 
 `kinetix_edge_dependency_failures_total{dependency}`, `kinetix_edge_socket_upgrades_total{app,outcome}` (`upgraded`,
 `refused`, `unavailable`, `not_websocket`, `origin_refused`, `session_refused`, `session_unavailable`, `role_refused`),
 `kinetix_edge_session_revocations_total{app,outcome}` (`revoked`, `already_revoked`, `failed`: the tokens of a session
-the edge ended without a logout). `route` is the route template (`/bff/api/{path}`), never a raw path.
+the edge ended without a logout), `kinetix_edge_api_requests_total{route,principal_class,status}`,
+`kinetix_edge_api_request_duration_seconds{route,principal_class}`, and `kinetix_edge_decisions_total{rule,outcome}`.
+`route` is the route template (`/bff/api/{path}`, `/api/v1/orders/{path}`), never a raw path.
 
 ## Everything runs in Docker
 

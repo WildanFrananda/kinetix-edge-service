@@ -23,6 +23,10 @@ redis_store.commands = {
    "PSUBSCRIBE",
    "UNSUBSCRIBE",
    "PUNSUBSCRIBE",
+   "INCR",
+   "ZADD",
+   "ZREMRANGEBYSCORE",
+   "ZCARD",
 }
 
 local function pool_of(environment: Environment): string

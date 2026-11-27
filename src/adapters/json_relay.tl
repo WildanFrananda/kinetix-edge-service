@@ -8,6 +8,16 @@ codec.decode_array_with_array_mt(true)
 codec.decode_invalid_numbers(false)
 codec.encode_escape_forward_slash(false)
 
+function json_relay.is_valid_json(text: string): boolean
+   if text == nil or text == "" then
+      return false
+   end
+
+   local decoded = codec.decode(text)
+
+   return decoded is cjson.Document
+end
+
 function json_relay.document(text: string): cjson.Document
    if text == nil or text == "" then
       return nil

@@ -10,6 +10,11 @@ end
 
 errors.catalogue = {
    INVALID_REQUEST = entry(400, "INVALID_REQUEST", "The request body is not what this endpoint takes."),
+   IDEMPOTENCY_KEY_REQUIRED = entry(
+      400,
+      "IDEMPOTENCY_KEY_REQUIRED",
+      "An Idempotency-Key header is required for this request."
+   ),
    CLIENT_ADDRESS_REQUIRED = entry(
       400,
       "CLIENT_ADDRESS_REQUIRED",
