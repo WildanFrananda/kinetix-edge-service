@@ -95,7 +95,35 @@ local ERRORS: {string: event_protocol.ErrorDetail} = {
       message = "Unknown event name.",
       retryable = false,
    },
+   rate_limited = {
+      code = "TOO_MANY_REQUESTS",
+      reason = "rate_limited",
+      message = "Too many commands. Slow down.",
+      retryable = true,
+   },
 }
+
+local COURIER_COMMANDS: {string: boolean} = {
+   ["courier.location.ping"] = true,
+   ["courier.location.batch"] = true,
+   ["courier.duty.set"] = true,
+   ["matching.job.pickup"] = true,
+   ["matching.job.podUpload"] = true,
+   ["matching.job.delivered"] = true,
+}
+
+function event_protocol.can_send_upstream(role: string, event_name: string): boolean
+   if role == nil or event_name == nil then
+      return false
+   end
+
+   local lower_role = string.lower(role)
+   if lower_role ~= "courier" and lower_role ~= "driver" then
+      return false
+   end
+
+   return COURIER_COMMANDS[event_name] == true
+end
 
 local function frame_error(request_id: string, key: string): event_protocol.ParsedFrame
    local detail = ERRORS[key] or ERRORS["invalid_payload"]

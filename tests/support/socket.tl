@@ -33,14 +33,17 @@ function socket.open(path: string, request: SocketRequest): OpenedSocket
       error("cannot make a WebSocket client: " .. tostring(failure))
    end
 
+   local extra = options.headers or {}
    local headers: {string} = {
       "X-Request-Id: " .. (options.request_id or client.request_id()),
-      "X-Forwarded-For: " .. scenario.forwarded_for,
    }
+   if extra["X-Forwarded-For"] == nil then
+      table.insert(headers, "X-Forwarded-For: " .. scenario.forwarded_for)
+   end
    if options.cookie ~= nil then
       table.insert(headers, "Cookie: " .. options.cookie)
    end
-   for name, value in pairs(options.headers or {}) do
+   for name, value in pairs(extra) do
       table.insert(headers, name .. ": " .. value)
    end
 

@@ -4,6 +4,7 @@ local record ErrorBody
    requestId: string
    minimumVersion: string
    storeUrl: string
+   messageKey: string
 end
 
 return ErrorBody

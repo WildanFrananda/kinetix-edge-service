@@ -74,16 +74,16 @@ local function bucket_key(
    return nil
 end
 
-function rate_limiter.evaluate_with(
+function rate_limiter.evaluate_group_with(
    consume: rate_limiter.ConsumeFn,
    now_ms: integer,
    environment: Environment,
-   route_rule: ApiRouteRule,
+   group_name: string,
    request: RequestContext,
    claims: PrincipalClaims,
    body: string
 ): RateLimitResult
-   local rules = rate_limits.for_group(route_rule.rate_limit_group)
+   local rules = rate_limits.for_group(group_name)
    if #rules == 0 then
       return { ok = true, unavailable = false }
    end
@@ -123,6 +123,44 @@ function rate_limiter.evaluate_with(
    return { ok = true, unavailable = false, reason = "allowed" }
 end
 
+function rate_limiter.evaluate_with(
+   consume: rate_limiter.ConsumeFn,
+   now_ms: integer,
+   environment: Environment,
+   route_rule: ApiRouteRule,
+   request: RequestContext,
+   claims: PrincipalClaims,
+   body: string
+): RateLimitResult
+   return rate_limiter.evaluate_group_with(
+      consume,
+      now_ms,
+      environment,
+      route_rule.rate_limit_group,
+      request,
+      claims,
+      body
+   )
+end
+
+function rate_limiter.evaluate_group(
+   environment: Environment,
+   group_name: string,
+   request: RequestContext,
+   claims: PrincipalClaims,
+   body: string
+): RateLimitResult
+   return rate_limiter.evaluate_group_with(
+      rate_limit_store.consume,
+      clock.now_ms(),
+      environment,
+      group_name,
+      request,
+      claims,
+      body
+   )
+end
+
 function rate_limiter.evaluate(
    environment: Environment,
    route_rule: ApiRouteRule,
@@ -130,11 +168,11 @@ function rate_limiter.evaluate(
    claims: PrincipalClaims,
    body: string
 ): RateLimitResult
-   return rate_limiter.evaluate_with(
+   return rate_limiter.evaluate_group_with(
       rate_limit_store.consume,
       clock.now_ms(),
       environment,
-      route_rule,
+      route_rule.rate_limit_group,
       request,
       claims,
       body

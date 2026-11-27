@@ -40,6 +40,12 @@ describe("metrics", function()
          "auth decision prepublished")
       check.present(line_of(text, "kinetix_edge_decisions_total{rule=\"rate_limit\",outcome=\"auth_login_email\"} 0"),
          "rate limit decision prepublished")
+      check.present(line_of(text, "kinetix_edge_decisions_total{rule=\"kill_switch\",outcome=\"checkout\"} 0"),
+         "kill switch decision prepublished")
+      check.present(line_of(text, "kinetix_edge_decisions_total{rule=\"socket_cap\",outcome=\"limited\"} 0"),
+         "socket cap decision prepublished")
+      check.present(line_of(text, "kinetix_edge_decisions_total{rule=\"ws_command\",outcome=\"refused\"} 0"),
+         "ws command decision prepublished")
    end)
 
    it("records proxied API metrics by route and principal class and edge decisions", function()

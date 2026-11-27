@@ -1,10 +1,12 @@
 local cjson = require("cjson.safe")
 local context = require("http.context")
 local cookies = require("http.cookies")
+local errors = require("http.errors")
 local identity_answers = require("http.identity_answers")
 local identity_client = require("adapters.identity_client")
 local json_body = require("http.json_body")
 local json_relay = require("adapters.json_relay")
+local kill_switches = require("http.kill_switches")
 local lifetimes = require("http.lifetimes")
 local logger = require("adapters.logger")
 local metrics = require("adapters.metrics")
@@ -13,7 +15,6 @@ local redis_store = require("adapters.redis_store")
 local respond = require("http.respond")
 local sessions = require("http.sessions")
 local clock = require("adapters.clock")
-local errors = require("http.errors")
 local type AppPolicy = require("types.app_policy")
 local type ChallengeView = require("types.challenge_view")
 local type PendingSignIn = require("types.pending_sign_in")
@@ -180,6 +181,10 @@ function sign_in.open(request: RequestContext): redis.Client
 end
 
 local function settle_login(client: redis.Client, request: RequestContext, reply: UpstreamReply)
+   if reply == nil then
+      return
+   end
+
    if sign_in.refused_by_identity(request, reply, "login") then
       return
    end
@@ -217,6 +222,28 @@ local function settle_login(client: redis.Client, request: RequestContext, reply
    sign_in.not_understood(request, reply, "login")
 end
 
+local function send_login(client: redis.Client, request: RequestContext, email: string, password: string): UpstreamReply
+   local ks = kill_switches.check_client(client, "login")
+   if not ks.ok then
+      if ks.unavailable then
+         respond.error("SESSION_STORE_UNAVAILABLE", request.request_id, nil)
+         return nil
+      end
+
+      metrics.decision("kill_switch", "login")
+      logger.info("kill_switch_refused", { route = "/bff/login", feature = "login", request_id = request.request_id })
+      respond.feature_disabled(
+         errors.catalogue["FEATURE_DISABLED"],
+         request.request_id,
+         ks.retry_after,
+         ks.message_key
+      )
+      return nil
+   end
+
+   return identity_client.login(request, email, password)
+end
+
 function sign_in.login(request: RequestContext)
    local body = json_body.object()
    local email = json_body.text(body, "email", 254)
@@ -230,7 +257,7 @@ function sign_in.login(request: RequestContext)
       return
    end
 
-   settle_login(client, request, identity_client.login(request, email, password))
+   settle_login(client, request, send_login(client, request, email, password))
    redis_store.release(client)
 end
 

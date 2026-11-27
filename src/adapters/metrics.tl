@@ -19,6 +19,9 @@ local record metrics
    app_version_outcomes: {string}
    auth_outcomes: {string}
    rate_limit_outcomes: {string}
+   kill_switch_outcomes: {string}
+   socket_cap_outcomes: {string}
+   ws_command_outcomes: {string}
 end
 
 metrics.dict_name = "edge_metrics"
@@ -86,6 +89,30 @@ metrics.rate_limit_outcomes = {
    "api_user_principal",
    "api_admin_ip",
    "api_admin_principal",
+   "ws_command_ip",
+   "ws_command_principal",
+}
+
+metrics.kill_switch_outcomes = {
+   "login",
+   "register",
+   "checkout",
+   "topup",
+   "cart",
+   "payment",
+   "events_ws",
+}
+
+metrics.socket_cap_outcomes = {
+   "allowed",
+   "limited",
+}
+
+metrics.ws_command_outcomes = {
+   "allowed",
+   "refused",
+   "limited",
+   "unavailable",
 }
 
 metrics.early_check_outcomes = {
@@ -338,6 +365,18 @@ function metrics.prepublish()
 
    for _, outcome in ipairs(metrics.rate_limit_outcomes) do
       zero(series(DECISIONS, { { "rule", "rate_limit" }, { "outcome", outcome } }))
+   end
+
+   for _, outcome in ipairs(metrics.kill_switch_outcomes) do
+      zero(series(DECISIONS, { { "rule", "kill_switch" }, { "outcome", outcome } }))
+   end
+
+   for _, outcome in ipairs(metrics.socket_cap_outcomes) do
+      zero(series(DECISIONS, { { "rule", "socket_cap" }, { "outcome", outcome } }))
+   end
+
+   for _, outcome in ipairs(metrics.ws_command_outcomes) do
+      zero(series(DECISIONS, { { "rule", "ws_command" }, { "outcome", outcome } }))
    end
 
    for _, outcome in ipairs(metrics.early_check_outcomes) do

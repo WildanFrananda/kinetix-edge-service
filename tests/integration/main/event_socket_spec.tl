@@ -160,6 +160,76 @@ describe("the unified camelCase JSON event WebSocket", function()
       check.equal(snapshot["event"], "matching.job.snapshot", "seller snapshot received")
       local snap_data = snapshot["data"] as cjson.Object
       check.equal(snap_data["role"], "seller", "forwarded seller role")
+
+      opened.connection:send_text(
+         '{"event":"courier.location.ping","requestId":"req-esc-1","schemaVersion":1,"data":{"latitude":-6.2}}'
+      )
+      local refused = recv_json(opened)
+      check.equal(refused["event"], "command.error", "seller cannot send courier command upstream")
+      check.equal((refused["error"] as cjson.Object)["code"], "FORBIDDEN", "forbidden error code")
+      opened.connection:close()
+   end)
+
+   it("enforces X7 per-principal socket caps and frees slots on disconnect", function()
+      local token = bearer_login("courier@example.test")
+      local first = socket.open(
+         "/ws/v1/events",
+         { headers = { ["Authorization"] = "Bearer " .. token, ["X-Forwarded-For"] = "203.0.113.81" } }
+      )
+      local second = socket.open(
+         "/ws/v1/events",
+         { headers = { ["Authorization"] = "Bearer " .. token, ["X-Forwarded-For"] = "203.0.113.82" } }
+      )
+      check.equal(first.status, 101, "first courier socket opened")
+      check.equal(second.status, 101, "second courier socket opened")
+
+      local capped = socket.upgrade(
+         "/ws/v1/events",
+         { forwarded_for = "203.0.113.83", headers = { ["Authorization"] = "Bearer " .. token } },
+         nil
+      )
+      check.equal(capped.status, 429, "third concurrent courier socket refused with 429")
+      check.equal(client.text(capped, "error"), "TOO_MANY_REQUESTS", "socket cap error code")
+
+      first.connection:send_close()
+      first.connection:close()
+      local probe = 90
+      flows.eventually(function(): boolean
+         probe = probe + 1
+         local reply = socket.upgrade(
+            "/ws/v1/events",
+            {
+               forwarded_for = "203.0.113." .. tostring(probe),
+               headers = { ["Authorization"] = "Bearer " .. token },
+            },
+            nil
+         )
+         return reply.status == 101
+      end, "closing one socket releases its X7 slot")
+
+      second.connection:send_close()
+      second.connection:close()
+   end)
+
+   it("enforces X2 sliding-window rate limits on inbound WebSocket frames", function()
+      local token = bearer_login("customer@example.test")
+      local opened = socket.open("/ws/v1/events", { headers = { ["Authorization"] = "Bearer " .. token } })
+      check.equal(opened.status, 101, "buyer socket opened")
+
+      for seq = 1, 60 do
+         opened.connection:send_text(
+            '{"event":"system.ping","requestId":"req-rl-' .. tostring(seq) .. '","schemaVersion":1,"data":{}}'
+         )
+         local pong = recv_json(opened)
+         check.equal(pong["event"], "system.pong", "ping " .. tostring(seq) .. " within frame limit")
+      end
+
+      opened.connection:send_text('{"event":"system.ping","requestId":"req-rl-61","schemaVersion":1,"data":{}}')
+      local limited = recv_json(opened)
+      check.equal(limited["event"], "command.error", "61st frame rate limited")
+      local err_obj = limited["error"] as cjson.Object
+      check.equal(err_obj["code"], "TOO_MANY_REQUESTS", "ws rate limit code")
+      check.equal(err_obj["retryable"], true, "ws rate limit error is retryable")
       opened.connection:close()
    end)
 end)

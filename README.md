@@ -22,10 +22,11 @@ On port `8080`, plain HTTP on the Docker network. The gateway sends only `/bff/.
 | `POST` | `/bff/2fa/setup` | the secret and QR URL to show, from the pending enrolment |
 | `POST` | `/bff/2fa/enable` | `{ code }` → `{ enabled: true }`; the user then signs in again |
 | `POST` | `/bff/logout` | logs out at identity with the refresh token, deletes the session, expires both cookies (`204`, also when identity revoked the tokens and Redis then failed) |
+| `GET`, `PUT`, `DELETE` | `/bff/edge/kill-switches`, `/bff/edge/kill-switches/<feature>` | backoffice admin only: list, enable (`ttlSeconds`, `retryAfter`, `messageKey`, `reason`), or disable X8 kill switches (`edge:kill:*`) with audit logs |
 | `GET` | `/bff/ws/v1/matching/merchant`, `/bff/ws/v1/matching/merchant/websocket` | seller web only: a WebSocket upgrade from the app's own `Origin` with a `seller` session, proxied (query included) to matching's merchant socket through `${EDGE_API_UPSTREAM}`; the access token travels upstream in the `Sec-WebSocket-Protocol` entry `base64url.bearer.phx.<token>` and never back; the browser is answered `phoenix` only if it offered it |
-| `GET` | `/bff/ws/v1/events`, `/ws/v1/events` | unified `camelCase` JSON event WebSocket (X21) for buyers, sellers, and couriers; Redis `matching:position:*` latest-wins relay and matching upstream bridge |
+| `GET` | `/bff/ws/v1/events`, `/ws/v1/events` | unified `camelCase` JSON event WebSocket (X21) with X7 per-principal socket caps, X2 inbound frame rate limits, courier command role guard, Redis `matching:position:*` latest-wins relay, and matching upstream bridge |
 | any of `GET HEAD POST PUT PATCH DELETE` | `/bff/api/<path>` | forwarded to `${EDGE_API_UPSTREAM}/api/<path>` with the session's bearer; identity's throttled routes (`/api/v1/auth`, `/api/v1/couriers`) go to `${IDENTITY_HTTP_URL}` directly |
-| any of `GET HEAD POST PUT PATCH DELETE` | `/api/v1/{auth,couriers,orders,cart,payment}...` | selective public API proxy (X1 token claims/roles, X2 Redis sliding-window rate limits, X5 Midtrans IP allowlist, X6 mobile version gate, X15 security headers, X16 body/JSON/`Idempotency-Key` early checks, X18 principal-class metrics, X19 `X-Kinetix-*` hint sanitization) |
+| any of `GET HEAD POST PUT PATCH DELETE` | `/api/v1/{auth,couriers,orders,cart,payment}...` | selective public API proxy (X1 token claims/roles, X2 Redis sliding-window rate limits, X5 Midtrans IP allowlist, X6 mobile version gate, X8 kill switches, X15 security headers, X16 body/JSON/`Idempotency-Key` early checks, X18 principal-class metrics, X19 `X-Kinetix-*` hint sanitization) |
 | `GET` | `/health` | the process |
 | `GET` | `/health/ready` | Redis answers `PING` as the edge user |
 
@@ -45,7 +46,7 @@ Every answer carries `Cache-Control: no-store`. Every error is `{ error, message
 | 426 | `WEBSOCKET_REQUIRED` (with `Upgrade: websocket`) |
 | 429 | `SIGN_IN_DELAYED`, `TOO_MANY_REQUESTS` (identity's, with its `Retry-After`) |
 | 500, 502 | `INTERNAL_ERROR`, `IDENTITY_FAILED` |
-| 503 | `SESSION_STORE_UNAVAILABLE`, `IDENTITY_UNAVAILABLE`, `API_UNAVAILABLE` |
+| 503 | `SESSION_STORE_UNAVAILABLE`, `IDENTITY_UNAVAILABLE`, `API_UNAVAILABLE`, `FEATURE_DISABLED` |
 
 `/bff/register` answers identity's validation refusal as `INVALID_REQUEST` with identity's own words in `message`
 (`password must be longer than or equal to 12 characters`). A merchant socket refused by matching after the upgrade

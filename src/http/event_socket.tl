@@ -1,11 +1,16 @@
 local cjson = require("cjson.safe")
 local client_address = require("http.client_address")
+local clock = require("adapters.clock")
 local context = require("http.context")
+local errors = require("http.errors")
 local event_protocol = require("http.event_protocol")
 local host_aliases = require("adapters.host_aliases")
 local http_client = require("adapters.http_client")
+local kill_switches = require("http.kill_switches")
 local logger = require("adapters.logger")
 local metrics = require("adapters.metrics")
+local principal = require("http.principal")
+local rate_limiter = require("http.rate_limiter")
 local redis = require("resty.redis")
 local redis_store = require("adapters.redis_store")
 local respond = require("http.respond")
@@ -13,10 +18,13 @@ local secure_random = require("adapters.secure_random")
 local session_use = require("http.session_use")
 local sessions = require("http.sessions")
 local settings = require("http.settings")
+local socket_caps = require("http.socket_caps")
+local socket_caps_config = require("config.socket_caps")
 local socket_handshake = require("http.socket_handshake")
 local timing = require("config.timing")
 local websocket_client = require("resty.websocket.client")
 local websocket_server = require("resty.websocket.server")
+local type PrincipalClaims = require("types.principal_claims")
 local type RequestContext = require("types.request_context")
 
 local record event_socket
@@ -69,6 +77,9 @@ local record Hub
    flush_scheduled: boolean
    writing: boolean
    closed: boolean
+   caller: Caller
+   conn_id: string
+   last_renew_ms: integer
 end
 
 local function new_event_id(): string
@@ -155,11 +166,11 @@ local function stop_subscriber(hub: Hub)
    local thread = hub.sub_thread
    hub.subscriber = nil
    hub.sub_thread = nil
+   if thread ~= nil then
+      ngx.thread.kill(thread)
+   end
    if previous ~= nil then
       previous:close()
-   end
-   if thread ~= nil then
-      ngx.thread.wait(thread)
    end
 end
 
@@ -359,8 +370,12 @@ local function open_matching_upstream(caller: Caller): websocket_client.Connecti
    return upstream
 end
 
-local function close_hub(hub: Hub)
+local function close_hub(hub: Hub, upstream_thread: ngx.Thread)
    hub.closed = true
+   socket_caps.release(settings.current.environment, hub.caller.principal_id, hub.conn_id)
+   if upstream_thread ~= nil then
+      ngx.thread.kill(upstream_thread)
+   end
    if hub.upstream ~= nil then
       hub.upstream:send_close()
       hub.upstream:close()
@@ -368,7 +383,7 @@ local function close_hub(hub: Hub)
    end
    stop_subscriber(hub)
    if hub.flush_thread ~= nil then
-      ngx.thread.wait(hub.flush_thread)
+      ngx.thread.kill(hub.flush_thread)
       hub.flush_thread = nil
    end
    hub.client:send_close()
@@ -403,6 +418,42 @@ local function spawn_upstream_relay(hub: Hub): ngx.Thread
    end)
 end
 
+local function ws_rate_limited(caller: Caller): string
+   local rl_request: RequestContext = {
+      request_id = caller.request_id,
+      client_address = caller.client_ip,
+      method = "POST",
+      headers = {},
+   }
+   local rl_claims: PrincipalClaims = {
+      has_bearer = true,
+      valid_shape = true,
+      sub = caller.principal_id,
+      role = caller.role,
+      token_use = "access",
+      audience_ok = true,
+      principal_class = principal.class_of_role(caller.role),
+   }
+   local checked = rate_limiter.evaluate_group(
+      settings.current.environment,
+      "ws_command",
+      rl_request,
+      rl_claims,
+      nil
+   )
+   if checked.unavailable then
+      metrics.decision("ws_command", "unavailable")
+      return "upstream_unavailable"
+   end
+
+   if not checked.ok then
+      metrics.decision("ws_command", "limited")
+      return "rate_limited"
+   end
+
+   return nil
+end
+
 local function handle_client_text(hub: Hub, caller: Caller, raw: string)
    local parsed = event_protocol.parse_frame(raw)
    if not parsed.ok then
@@ -416,7 +467,14 @@ local function handle_client_text(hub: Hub, caller: Caller, raw: string)
       return
    end
 
-   if parsed.event == "system.ping" and hub.upstream == nil then
+   local limit_key = ws_rate_limited(caller)
+   if limit_key ~= nil then
+      local detail = event_protocol.error_detail(limit_key)
+      safe_send_text(hub, event_protocol.error_json(parsed.request_id, detail, new_event_id(), now_iso()))
+      return
+   end
+
+   if parsed.event == "system.ping" then
       safe_send_text(hub, event_protocol.pong_json(parsed.request_id, new_event_id(), now_iso()))
       return
    end
@@ -432,6 +490,14 @@ local function handle_client_text(hub: Hub, caller: Caller, raw: string)
    end
 
    if hub.upstream ~= nil then
+      if not event_protocol.can_send_upstream(caller.role, parsed.event) then
+         metrics.decision("ws_command", "refused")
+         local detail = event_protocol.error_detail("forbidden")
+         safe_send_text(hub, event_protocol.error_json(parsed.request_id, detail, new_event_id(), now_iso()))
+         return
+      end
+
+      metrics.decision("ws_command", "allowed")
       local bytes, send_err = hub.upstream:send_text(raw)
       if bytes == nil then
          logger.warn("event_socket_upstream_send_failed", { cause = send_err or "", request_id = caller.request_id })
@@ -447,8 +513,25 @@ local function handle_client_text(hub: Hub, caller: Caller, raw: string)
 end
 
 local function run_session(caller: Caller)
+   local environment = settings.current.environment
+   local conn_id = socket_caps.new_connection_id()
+   local cap_ok, cap_unavailable = socket_caps.acquire(environment, caller.principal_id, caller.role, conn_id)
+   if cap_unavailable then
+      metrics.socket_upgrade(caller.app_label, "session_unavailable")
+      return respond.error("SESSION_STORE_UNAVAILABLE", caller.request_id, nil)
+   end
+
+   if not cap_ok then
+      metrics.decision("socket_cap", "limited")
+      metrics.socket_upgrade(caller.app_label, "refused")
+      return respond.error("TOO_MANY_REQUESTS", caller.request_id, nil)
+   end
+
+   metrics.decision("socket_cap", "allowed")
+
    local upstream = open_matching_upstream(caller)
    if caller.role == "courier" and upstream == nil then
+      socket_caps.release(environment, caller.principal_id, conn_id)
       metrics.socket_upgrade(caller.app_label, "unavailable")
       return respond.error("API_UNAVAILABLE", caller.request_id, nil)
    end
@@ -458,6 +541,7 @@ local function run_session(caller: Caller)
       if upstream ~= nil then
          upstream:close()
       end
+      socket_caps.release(environment, caller.principal_id, conn_id)
       metrics.socket_upgrade(caller.app_label, "refused")
       logger.info("event_socket_upgrade_failed", { cause = failure or "", request_id = caller.request_id })
       return
@@ -478,12 +562,21 @@ local function run_session(caller: Caller)
       flush_scheduled = false,
       writing = false,
       closed = false,
+      caller = caller,
+      conn_id = conn_id,
+      last_renew_ms = clock.now_ms(),
    }
 
    local upstream_thread = spawn_upstream_relay(hub)
 
    while not hub.closed do
       local data, kind, err = server:recv_frame()
+      local now_ms = clock.now_ms()
+      if now_ms - hub.last_renew_ms >= socket_caps_config.renew_interval_ms then
+         socket_caps.renew(environment, caller.principal_id, conn_id)
+         hub.last_renew_ms = now_ms
+      end
+
       if data == nil then
          if err ~= "timeout" then
             hub.closed = true
@@ -497,10 +590,7 @@ local function run_session(caller: Caller)
       end
    end
 
-   close_hub(hub)
-   if upstream_thread ~= nil then
-      ngx.thread.wait(upstream_thread)
-   end
+   close_hub(hub, upstream_thread)
 end
 
 local function verify_bearer_me(request: RequestContext, token: string, client_ip: string): string, string
@@ -561,6 +651,30 @@ local function verify_bearer_me(request: RequestContext, token: string, client_i
    return principal_id, string.lower(role)
 end
 
+local function events_kill_switched(request: RequestContext, app_label: string): boolean
+   local ks = kill_switches.evaluate(settings.current.environment, "events_ws")
+   if ks.ok then
+      return false
+   end
+
+   if ks.unavailable then
+      metrics.socket_upgrade(app_label, "session_unavailable")
+      respond.error("SESSION_STORE_UNAVAILABLE", request.request_id, nil)
+      return true
+   end
+
+   metrics.decision("kill_switch", "events_ws")
+   metrics.socket_upgrade(app_label, "refused")
+   logger.info("kill_switch_refused", { route = ngx.var.uri, feature = "events_ws", request_id = request.request_id })
+   respond.feature_disabled(
+      errors.catalogue["FEATURE_DISABLED"],
+      request.request_id,
+      ks.retry_after,
+      ks.message_key
+   )
+   return true
+end
+
 function event_socket.serve_bff(request: RequestContext)
    local app = request.app.name
    if not socket_handshake.is_upgrade(request.headers) then
@@ -573,6 +687,10 @@ function event_socket.serve_bff(request: RequestContext)
       metrics.socket_upgrade(app, "origin_refused")
       logger.info("csrf_refused", { reason = "event_socket_origin", app = app, request_id = request.request_id })
       return respond.error("CSRF_REFUSED", request.request_id, nil)
+   end
+
+   if events_kill_switched(request, app) then
+      return
    end
 
    local client = sessions.open()
@@ -609,6 +727,10 @@ function event_socket.serve_bearer(request: RequestContext)
    if token == nil then
       metrics.socket_upgrade("api", "session_refused")
       return respond.error("SESSION_REQUIRED", request.request_id, nil)
+   end
+
+   if events_kill_switched(request, "api") then
+      return
    end
 
    local forwarded = client_address.from_forwarded_for(context.joined(request.headers, "x-forwarded-for", ","))

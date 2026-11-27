@@ -37,6 +37,7 @@ api_routes.rules = {
       strip_client_header = false,
       require_auth = false,
       rate_limit_group = "auth_login",
+      kill_switch = "login",
    },
    {
       name = "/api/v1/auth/register",
@@ -50,6 +51,7 @@ api_routes.rules = {
       strip_client_header = false,
       require_auth = false,
       rate_limit_group = "auth_register",
+      kill_switch = "register",
    },
    {
       name = "/api/v1/auth/refresh",
@@ -169,6 +171,7 @@ api_routes.rules = {
       strip_client_header = false,
       require_auth = false,
       rate_limit_group = "auth_register",
+      kill_switch = "register",
    },
    {
       name = "/api/v1/couriers/{path}",
@@ -197,6 +200,7 @@ api_routes.rules = {
       require_auth = true,
       allowed_roles = BUYER_ROLES,
       rate_limit_group = "checkout",
+      kill_switch = "checkout",
    },
    {
       name = "/api/v1/orders/my-orders",
@@ -281,6 +285,7 @@ api_routes.rules = {
       require_auth = true,
       allowed_roles = BUYER_ROLES,
       rate_limit_group = "api_user",
+      kill_switch = "cart",
    },
    {
       name = "/api/v1/payment/wallet/customer/topup",
@@ -295,6 +300,7 @@ api_routes.rules = {
       require_auth = true,
       allowed_roles = BUYER_ROLES,
       rate_limit_group = "topup",
+      kill_switch = "topup",
    },
    {
       name = "/api/v1/payment/wallet/customer/{path}",
@@ -309,6 +315,7 @@ api_routes.rules = {
       require_auth = true,
       allowed_roles = BUYER_ROLES,
       rate_limit_group = "api_user",
+      kill_switch = "payment",
    },
    {
       name = "/api/v1/payment/wallet/merchant/{path}",
@@ -323,6 +330,7 @@ api_routes.rules = {
       require_auth = true,
       allowed_roles = SELLER_ROLES,
       rate_limit_group = "api_user",
+      kill_switch = "payment",
    },
    {
       name = "/api/v1/payment/wallet/driver/{path}",
@@ -337,6 +345,7 @@ api_routes.rules = {
       require_auth = true,
       allowed_roles = COURIER_ROLES,
       rate_limit_group = "api_user",
+      kill_switch = "payment",
    },
    {
       name = "/api/v1/payment/gateway/midtrans/notifications",
@@ -364,6 +373,7 @@ api_routes.rules = {
       require_auth = true,
       allowed_roles = PAYMENT_ROLES,
       rate_limit_group = "api_user",
+      kill_switch = "payment",
    },
 }
 

@@ -58,6 +58,20 @@ function respond.upgrade_required(
    respond.json(failure.status, body, nil)
 end
 
+function respond.feature_disabled(failure: EdgeError, request_id: string, retry_after: string, message_key: string)
+   local body: ErrorBody = {
+      error = failure.code,
+      message = failure.message,
+      requestId = request_id,
+      messageKey = message_key,
+   }
+   if retry_after ~= nil then
+      ngx.header["Retry-After"] = retry_after
+   end
+
+   respond.json(failure.status, body, nil)
+end
+
 function respond.error(code: string, request_id: string, set_cookies: {string})
    respond.edge_error(errors.catalogue[code], request_id, set_cookies, nil)
 end

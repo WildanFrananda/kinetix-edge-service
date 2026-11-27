@@ -2,6 +2,9 @@ local errors = require("http.errors")
 local identity_answers = require("http.identity_answers")
 local identity_client = require("adapters.identity_client")
 local json_body = require("http.json_body")
+local kill_switches = require("http.kill_switches")
+local logger = require("adapters.logger")
+local metrics = require("adapters.metrics")
 local redis = require("resty.redis")
 local redis_store = require("adapters.redis_store")
 local respond = require("http.respond")
@@ -59,6 +62,26 @@ function sign_up.serve(request: RequestContext)
    local client = sign_in.open(request)
    if client == nil then
       return
+   end
+
+   local ks = kill_switches.check_client(client, "register")
+   if not ks.ok then
+      if not ks.unavailable then
+         redis_store.release(client)
+         metrics.decision("kill_switch", "register")
+         logger.info(
+            "kill_switch_refused",
+            { route = "/bff/register", feature = "register", request_id = request.request_id }
+         )
+         return respond.feature_disabled(
+            errors.catalogue["FEATURE_DISABLED"],
+            request.request_id,
+            ks.retry_after,
+            ks.message_key
+         )
+      end
+
+      return respond.error("SESSION_STORE_UNAVAILABLE", request.request_id, nil)
    end
 
    settle(client, request, identity_client.register(request, email, password))
